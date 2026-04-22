@@ -1,0 +1,52 @@
+{
+  "baseline": {
+    "label": "baseline",
+    "overall_max_fun_score": 87.0,
+    "overall_mean_fun_score": 76.25,
+    "overall_min_fun_score": 57.0,
+    "path": "assets\\fun_agent_bombproc_baseline.json",
+    "rows": 32
+  },
+  "candidate": {
+    "label": "candidate",
+    "overall_max_fun_score": 87.0,
+    "overall_mean_fun_score": 76.3125,
+    "overall_min_fun_score": 58.0,
+    "path": "assets\\fun_agent_bombproc_candidate_final.json",
+    "rows": 32
+  },
+  "delta": {
+    "overall_mean_fun_score": 0.0625,
+    "rows": 0
+  },
+  "profiles": {
+    "aggressive": {
+      "baseline_count": 8.0,
+      "baseline_mean_fun_score": 85.125,
+      "candidate_count": 8.0,
+      "candidate_mean_fun_score": 86.25,
+      "delta_mean_fun_score": 1.125
+    },
+    "arcade": {
+      "baseline_count": 8.0,
+      "baseline_mean_fun_score": 81.875,
+      "candidate_count": 8.0,
+      "candidate_mean_fun_score": 81.75,
+      "delta_mean_fun_score": -0.125
+    },
+    "casual": {
+      "baseline_count": 8.0,
+      "baseline_mean_fun_score": 74.125,
+      "candidate_count": 8.0,
+      "candidate_mean_fun_score": 72.25,
+      "delta_mean_fun_score": -1.875
+    },
+    "survival": {
+      "baseline_count": 8.0,
+      "baseline_mean_fun_score": 63.875,
+      "candidate_count": 8.0,
+      "candidate_mean_fun_score": 65.0,
+      "delta_mean_fun_score": 1.125
+    }
+  }
+}

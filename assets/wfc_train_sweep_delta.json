@@ -1,0 +1,52 @@
+{
+  "baseline": {
+    "label": "baseline",
+    "overall_max_fun_score": 70.0,
+    "overall_mean_fun_score": 40.875,
+    "overall_min_fun_score": 22.0,
+    "path": "assets\\wfc_train_sweep_baseline.csv",
+    "rows": 144
+  },
+  "candidate": {
+    "label": "candidate",
+    "overall_max_fun_score": 74.0,
+    "overall_mean_fun_score": 42.020833333333336,
+    "overall_min_fun_score": 22.0,
+    "path": "assets\\wfc_train_sweep_candidate.csv",
+    "rows": 144
+  },
+  "delta": {
+    "overall_mean_fun_score": 1.1458333333333357,
+    "rows": 0
+  },
+  "profiles": {
+    "aggressive": {
+      "baseline_count": 36.0,
+      "baseline_mean_fun_score": 37.833333333333336,
+      "candidate_count": 36.0,
+      "candidate_mean_fun_score": 40.166666666666664,
+      "delta_mean_fun_score": 2.3333333333333286
+    },
+    "arcade": {
+      "baseline_count": 36.0,
+      "baseline_mean_fun_score": 37.583333333333336,
+      "candidate_count": 36.0,
+      "candidate_mean_fun_score": 39.166666666666664,
+      "delta_mean_fun_score": 1.5833333333333286
+    },
+    "casual": {
+      "baseline_count": 36.0,
+      "baseline_mean_fun_score": 43.75,
+      "candidate_count": 36.0,
+      "candidate_mean_fun_score": 43.416666666666664,
+      "delta_mean_fun_score": -0.3333333333333357
+    },
+    "survival": {
+      "baseline_count": 36.0,
+      "baseline_mean_fun_score": 44.333333333333336,
+      "candidate_count": 36.0,
+      "candidate_mean_fun_score": 45.333333333333336,
+      "delta_mean_fun_score": 1.0
+    }
+  }
+}

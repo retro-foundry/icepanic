@@ -1,0 +1,109 @@
+{
+  "generated_utc": "2026-04-23T09:56:39.470186+00:00",
+  "per_profile": {
+    "aggressive": {
+      "latest_mean_fun_score": 81.125,
+      "points": 2,
+      "spark_points": 2,
+      "sparkline": "@.",
+      "unstable": false,
+      "unstable_reasons": [],
+      "window_delta_fun_score": -2.25,
+      "window_max_fun_score": 83.375,
+      "window_mean_abs_step": 2.25,
+      "window_mean_fun_score": 82.25,
+      "window_min_fun_score": 81.125,
+      "window_stdev_fun_score": 1.125,
+      "window_swing_fun_score": 2.25,
+      "window_used": 2
+    },
+    "arcade": {
+      "latest_mean_fun_score": 71.0,
+      "points": 2,
+      "spark_points": 2,
+      "sparkline": "@.",
+      "unstable": false,
+      "unstable_reasons": [],
+      "window_delta_fun_score": -2.25,
+      "window_max_fun_score": 73.25,
+      "window_mean_abs_step": 2.25,
+      "window_mean_fun_score": 72.125,
+      "window_min_fun_score": 71.0,
+      "window_stdev_fun_score": 1.125,
+      "window_swing_fun_score": 2.25,
+      "window_used": 2
+    },
+    "casual": {
+      "latest_mean_fun_score": 65.75,
+      "points": 2,
+      "spark_points": 2,
+      "sparkline": "@.",
+      "unstable": false,
+      "unstable_reasons": [],
+      "window_delta_fun_score": -1.25,
+      "window_max_fun_score": 67.0,
+      "window_mean_abs_step": 1.25,
+      "window_mean_fun_score": 66.375,
+      "window_min_fun_score": 65.75,
+      "window_stdev_fun_score": 0.625,
+      "window_swing_fun_score": 1.25,
+      "window_used": 2
+    },
+    "survival": {
+      "latest_mean_fun_score": 62.375,
+      "points": 2,
+      "spark_points": 2,
+      "sparkline": "@.",
+      "unstable": false,
+      "unstable_reasons": [],
+      "window_delta_fun_score": -0.5,
+      "window_max_fun_score": 62.875,
+      "window_mean_abs_step": 0.5,
+      "window_mean_fun_score": 62.625,
+      "window_min_fun_score": 62.375,
+      "window_stdev_fun_score": 0.25,
+      "window_swing_fun_score": 0.5,
+      "window_used": 2
+    }
+  },
+  "profiles_analyzed": [
+    "aggressive",
+    "arcade",
+    "casual",
+    "survival"
+  ],
+  "snapshot_count": 2,
+  "snapshots": [
+    {
+      "generated_utc": "2026-04-23T09:53:02.927085+00:00",
+      "label": "fun_agent_postfix_recalib_baseline",
+      "overall_mean_fun_score": 71.625,
+      "path": "assets\\fun_agent_postfix_recalib_baseline.json",
+      "profiles_present": [
+        "aggressive",
+        "arcade",
+        "casual",
+        "survival"
+      ]
+    },
+    {
+      "generated_utc": "2026-04-23T09:54:11.673640+00:00",
+      "label": "fun_agent_postfix_recalib_tuned",
+      "overall_mean_fun_score": 70.0625,
+      "path": "assets\\fun_agent_postfix_recalib_tuned.json",
+      "profiles_present": [
+        "aggressive",
+        "arcade",
+        "casual",
+        "survival"
+      ]
+    }
+  ],
+  "thresholds": {
+    "unstable_stdev_threshold": 5.0,
+    "unstable_step_threshold": 4.0,
+    "unstable_swing_threshold": 12.0
+  },
+  "unstable_profiles": [],
+  "window": 2
+}

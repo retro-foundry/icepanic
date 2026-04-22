@@ -1,0 +1,21 @@
+build/
+out/
+*.user
+*.suo
+*.pdb
+*.obj
+*.ilk
+*.exp
+*.lib
+*.dll
+
+# Runtime/generated asset clutter
+assets/meta_shards.sav
+assets/legacy_debug/
+assets/sprites_16/
+assets/frame_dump*/
+assets/frame_dump_synth/
+assets/frame_dump_5bpl/
+assets/amiga_frame_bundle.iab
+assets/amiga_frame_bundle.txt
+assets/amiga_parity_report*.txt

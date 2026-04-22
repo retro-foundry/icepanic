@@ -1,0 +1,52 @@
+{
+  "baseline": {
+    "label": "baseline",
+    "overall_max_fun_score": 64.0,
+    "overall_mean_fun_score": 43.875,
+    "overall_min_fun_score": 26.0,
+    "path": "assets\\fun_agent_skillloop_dbg_baseline.json",
+    "rows": 32
+  },
+  "candidate": {
+    "label": "candidate",
+    "overall_max_fun_score": 64.0,
+    "overall_mean_fun_score": 44.09375,
+    "overall_min_fun_score": 26.0,
+    "path": "assets\\fun_agent_skillloop_dbg_tuned_v5.json",
+    "rows": 32
+  },
+  "delta": {
+    "overall_mean_fun_score": 0.21875,
+    "rows": 0
+  },
+  "profiles": {
+    "aggressive": {
+      "baseline_count": 8.0,
+      "baseline_mean_fun_score": 33.75,
+      "candidate_count": 8.0,
+      "candidate_mean_fun_score": 34.0,
+      "delta_mean_fun_score": 0.25
+    },
+    "arcade": {
+      "baseline_count": 8.0,
+      "baseline_mean_fun_score": 38.25,
+      "candidate_count": 8.0,
+      "candidate_mean_fun_score": 38.5,
+      "delta_mean_fun_score": 0.25
+    },
+    "casual": {
+      "baseline_count": 8.0,
+      "baseline_mean_fun_score": 52.75,
+      "candidate_count": 8.0,
+      "candidate_mean_fun_score": 52.75,
+      "delta_mean_fun_score": 0.0
+    },
+    "survival": {
+      "baseline_count": 8.0,
+      "baseline_mean_fun_score": 50.75,
+      "candidate_count": 8.0,
+      "candidate_mean_fun_score": 51.125,
+      "delta_mean_fun_score": 0.375
+    }
+  }
+}

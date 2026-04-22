@@ -1,0 +1,491 @@
+# Icepanic Development Plan (Updated)
+
+## Procgen WFC Learning Loop (2026-04-23)
+- Capture commands:
+  - `python tools/run_fun_agent_sweep.py --agent build/Debug/icepanic_fun_agent.exe --runs 4 --ticks 8000 --seeds 1337,1338,1339,1340,1341,1342,1343,1344,1345,1346,1347,1348,1337,1338,1339,1340,1341,1342,1343,1344,1345,1346,1347,1348,1337,1338,1339,1340,1341,1342,1343,1344,1345,1346,1347,1348 --profiles arcade,casual,survival,aggressive --output assets/wfc_train_sweep_baseline.csv --summary-json assets/wfc_train_sweep_baseline.json --round-map-samples-out assets/wfc_train_samples.jsonl`
+  - `python tools/build_procgen_wfc_corpus.py --samples assets/wfc_train_samples.jsonl --out-corpus assets/procgen_wfc_corpus.json --out-notes assets/procgen_good_levels.md --out-header src/core/procgen_wfc_templates.h --target-templates 64`
+  - `python tools/run_fun_agent_sweep.py --agent build/Debug/icepanic_fun_agent.exe --runs 4 --ticks 8000 --seeds 1337,1338,1339,1340,1341,1342,1343,1344,1345,1346,1347,1348,1337,1338,1339,1340,1341,1342,1343,1344,1345,1346,1347,1348,1337,1338,1339,1340,1341,1342,1343,1344,1345,1346,1347,1348 --profiles arcade,casual,survival,aggressive --output assets/wfc_train_sweep_candidate.csv --summary-json assets/wfc_train_sweep_candidate.json`
+  - `python tools/compare_fun_agent_sweeps.py --baseline assets/wfc_train_sweep_baseline.csv --candidate assets/wfc_train_sweep_candidate.csv --out-json assets/wfc_train_sweep_delta.json`
+- Locked balanced gate criteria:
+  - all 4 profiles required (`arcade`, `casual`, `survival`, `aggressive`),
+  - minimum `3` samples/profile per `map_id`,
+  - `overall_mean_quality >= 50`,
+  - per-profile mean quality `>= 40`.
+- Current corpus status:
+  - unique maps seen: `195`,
+  - gated map IDs: `35`,
+  - embedded WFC templates: `64`,
+  - 3x3 pattern count: `643`.
+- Top gated map IDs (overall / profile means):
+  - `1a96c542e087454d`: overall `73.14` (`arc 73.14`, `cas 73.12`, `sur 73.14`, `agg 73.15`)
+  - `cadc57cf42af636a`: overall `72.99` (`arc 73.00`, `cas 73.00`, `sur 73.00`, `agg 72.96`)
+  - `36a4c43c5e48c284`: overall `72.94` (`arc 72.96`, `cas 72.93`, `sur 72.93`, `agg 72.95`)
+  - `3c47a0d85c3a141d`: overall `72.88` (`arc 72.86`, `cas 72.89`, `sur 72.89`, `agg 72.86`)
+  - `4d3209dbe4f9206b`: overall `72.75` (`arc 72.97`, `cas 72.97`, `sur 72.97`, `agg 72.11`)
+- Latest sweep delta summary (`assets/wfc_train_sweep_delta.json`):
+  - overall mean fun: `+1.146` (`40.875 -> 42.021`),
+  - profile deltas: `arc +1.583`, `cas -0.333`, `sur +1.000`, `agg +2.333`,
+  - acceptance checks passed:
+    - overall non-regression (`candidate >= baseline`),
+    - no profile below `-1.0`,
+    - gated map count `35` (target `>= 30`).
+- Iteration note:
+  - tested an additional WFC-selection experiment (early-round restricted template pool + quality-order preference),
+  - observed weaker outcome (`overall +0.229`) and larger profile regressions (`arc -0.667`, `sur -0.417`) vs current locked candidate,
+  - reverted experiment; kept the stronger integration path.
+  - accepted gameplay tuning pass: bonus-item threshold now stays lowered through round 3 and `SWARM` only increases the threshold from round 5 onward,
+  - this pass improved arcade/aggressive/survival while keeping casual within the allowed regression band,
+  - tested follow-up variant (`round<=2` lowered threshold with same swarm rule) and rejected it (`overall -0.417`, `arc -1.333`) relative to baseline,
+  - tested WFC template round-friendliness bias pass for rounds 4-6 and rejected it due casual regression (`cas -1.833`),
+  - tested delaying WFC takeover to round 5 and rejected it (`overall +0.479`, weaker than current `+1.146` path),
+  - tested template realization retries with centered spawn/enemy placement heuristics and rejected (`overall -0.146`),
+  - tested a lighter retry variant (random enemy placement per retry) and rejected (`agg -1.333`),
+  - refreshed `wfc_train_samples` and rebuilt WFC corpus/templates on the tuned gameplay state so offline learning data stays aligned.
+  - map-character iteration (2026-04-23, in-progress):
+    - procedural/template generators now inject clustered immovable-ice landmarks (`U`) with round-scaled targets (R1-2:2, R3-5:3, R6-8:4, R9+:5),
+    - WFC template selection is now enabled from round 1 to reduce noisy/fully-random early boards and improve map identity continuity,
+    - black-ice stage mutator now avoids spawn choke, biases additions near existing solids, and reduces add-count when unbreakable density is already high,
+    - post-stage-modifier mine-pocket safety pass now re-applies mine-anchor opportunity shaping before enemy spawn.
+  - quick spot-check sweep for this iteration:
+    - command: `python tools/run_fun_agent_sweep.py --agent build/Debug/icepanic_fun_agent.exe --runs 1 --ticks 4000 --seeds 9001,9002,9003,9004 --profiles arcade,casual,survival,aggressive --output tmp_unbreakable_candidate_v3.csv --summary-json tmp_unbreakable_candidate_v3.json --round-map-samples-out tmp_unbreakable_candidate_v3.jsonl`
+    - sampled unbreakable presence (from round-map samples): round1 `2.0`, round2 `2.0`, round3 `3.0`, round4 `3.0`, round5 `4.0` avg `U` tiles per map.
+  - balance/map-generation iteration (2026-04-23, latest):
+    - baseline sweep:
+      - `python tools/run_fun_agent_sweep.py --agent build/Debug/icepanic_fun_agent.exe --runs 3 --ticks 8000 --seeds 1337,1338,1339,1340,1341,1342,1343,1344 --profiles arcade,casual,survival,aggressive --output tmp_balance_mapgen_baseline.csv --summary-json tmp_balance_mapgen_baseline.json --round-map-samples-out tmp_balance_mapgen_baseline.jsonl`
+      - baseline means: `arc 36.625`, `cas 40.375`, `sur 44.375`, `agg 35.500`.
+    - accepted generator tuning:
+      - immovable landmark conversion keeps round-scaled `U` targets but adds softer motif shaping only in later rounds (`round >= 4`) to preserve early-round flow,
+      - motif scoring influence reduced to avoid over-constraining central lanes,
+      - map-pressure correction retained as enemy spawn/speed-only (no round-config mutation), keeping stage-modifier deterministic test contracts stable.
+    - accepted candidate delta (`tmp_balance_mapgen_candidate_v7.csv` vs baseline):
+      - overall `+0.031`,
+      - `arc +0.125`, `cas +1.250`, `sur +0.000`, `agg -1.250`.
+    - rejected candidates this cycle:
+      - stronger early motif + escort variants that improved casual/survival but caused large aggressive or arcade regressions,
+      - early-round escort add-back variant (round1-2) rejected due aggressive collapse.
+
+## Current Status (Implemented)
+- Direction lock for gameplay refinement:
+  - progression should come from player mastery only (Spelunky-style skill loop),
+  - post-run meta/new-game+ menu is removed from the restart flow,
+  - game-over loop should stay arcade-simple: game over -> (new-score fanfare/name entry when applicable) -> clean new run.
+- Refinement memory notes (keep these constraints while tuning):
+  - avoid adding persistent stat unlocks or between-run power inflation,
+  - prioritize level/enemy readability, input clarity, and scoring depth over meta systems,
+  - high-score chase and moment-to-moment execution are the primary long-term retention hooks.
+- Latest gameplay refinement/playtest loop (2026-04-23):
+  - fixed evaluator harness stall after title-gate update: `fun_agent` now advances title/round intro via `fire_pressed` so sweeps no longer produce zero-activity false negatives,
+  - ran debug baseline and candidate sweeps (`assets/fun_agent_skillloop_dbg_baseline.*` vs `assets/fun_agent_skillloop_dbg_tuned_v5.*`),
+  - accepted gameplay tuning: opening-round timer cushion only (`round 1 +6s`, `round 2 +4s`, `round 3 +2s`) to improve onboarding pacing without flattening later rounds,
+  - rejected candidate: aggressive early bonus-item threshold reductions (they boosted arcade/aggressive but consistently hurt casual round-clear flow),
+  - accepted sweep delta (`assets/fun_agent_skillloop_dbg_delta_tuned_v5.json`): overall `+0.219` with no profile regressions (`arc +0.25`, `cas +0.00`, `sur +0.375`, `agg +0.25`).
+- C17 + CMake + SDL2 project skeleton with `core` and `platform_sdl` separation.
+- Deterministic 50 Hz gameplay loop with fixed-point movement and 320x200 output.
+- Core V1 mechanics:
+  - grid movement and buffered input,
+  - sliding block push system,
+  - enemy crush combos and escalating score,
+  - player death/lives/respawn with preserved map state,
+  - round intro/clear/game-over flow with progression scaling.
+- Asset pipeline:
+  - `tools/build_tileset.py` generates handcrafted 16x16 tiles directly,
+  - single canonical atlas output (`assets/sprite_atlas_16.png`),
+  - 32-color palette runtime indexed tile rendering (`assets/tileset.bin`).
+  - assets directory pruned to runtime/port-required files only (single-sheet atlas plus required binaries/levels).
+  - removed tracked debug/split-sprite/snapshot artifacts (`assets/legacy_debug/*`, `assets/sprites_16/*`, old sweep/bundle files).
+- Added V1.5 gameplay extensions:
+  - bonus item spawning after crush thresholds,
+  - bonus item lifetime + flashing expiry,
+  - item collection scoring by item type,
+  - special block alignment detection on block-stop events,
+  - special alignment score/time bonus + event flash + mystery item spawn.
+- Added data-driven round/content tranche:
+  - new enemy archetype `WANDERER` with lower pursuit bias and per-round mix tuning,
+  - level safety validation (single player, enemy presence, spawn adjacency and escape checks),
+  - deterministic procedural round generation with seeded retries and safety/lane constraints,
+  - fallback to built-in templates only if procedural generation fails repeatedly.
+- Ran play-agent-driven procedural tuning iterations:
+  - baseline sweep (`proc_iter0`) overall fun mean `60.42` (`arc 66.50`, `cas 59.67`, `sur 51.33`, `agg 64.17`),
+  - iteration 1 (reduced choke walls + central pocket) lifted overall to `61.71` and survival to `55.00`,
+  - iteration 2/3 (spawn sanctuary + density rebalance) reached overall `63.00` and survival `60.50` while keeping arcade/aggressive near baseline.
+  - large-sample sweep (`proc_iter4_large`, 24 seeds x 4 profiles) established a broader baseline at overall `63.50`.
+  - iteration 5 (added reachable-floor + junction-count topology gates plus stricter enemy-spawn candidate quality checks) improved all profile means vs large baseline:
+    - overall `64.12` (`+0.62`), `arc 70.62` (`+0.46`), `cas 60.71` (`+0.54`), `sur 56.71` (`+0.79`), `agg 68.42` (`+0.67`).
+  - iteration 6 (more aggressive spawn-line/sanctuary easing) regressed overall/profile means and was reverted.
+  - iteration 7 confirm sweep reproduced iteration 5 metrics exactly (`delta 0.00`), locking the accepted generator settings.
+  - iteration 8 (deterministic farthest-first enemy spawn ordering) slightly improved survival mean but regressed overall/arcade/aggressive and was reverted.
+  - iteration 9/10/11 roguelite power-up balancing sweeps:
+    - introduced capped/diminishing perk curves + cap-aware drafting + emergency low-life recovery offer,
+    - latest sweep (`proc_iter11_powerup_emergency_life`) is slightly up overall vs locked procedural baseline (`+0.07`) with stronger arcade/aggressive means and near-flat survival.
+- Added bomb-aware procedural + perk balance iteration pass:
+  - procedural generator now enforces mine-friendly blast pockets (cross-adjacent breakable clusters with escape lanes) and slightly smarter clustered ice placement,
+  - early-run perk draft now guarantees a mine option in the first perk checkpoint when mines are still locked,
+  - acceptance sweep artifacts:
+    - baseline: `assets/fun_agent_bombproc_baseline.{csv,json}`
+    - candidate: `assets/fun_agent_bombproc_candidate_final.{csv,json}`
+    - delta: `assets/fun_agent_bombproc_delta_final.json`
+  - current delta vs baseline (8 seeds x 4 profiles, 12 runs, 12000 ticks):
+    - overall `+0.06`, `aggressive +1.12`, `survival +1.12`, `arcade -0.12`, `casual -1.88`.
+- Replaced concept-extraction art path with handcrafted runtime graphics:
+  - `tools/build_tileset.py` now draws all required sprites/tiles directly in a unified style,
+  - generated outputs remain 16x16 indexed assets with a fixed 32-color palette,
+  - consolidated canonical art into one atlas: `assets/sprite_atlas_16.png`,
+  - enemy art now clearly distinguishes chaser (`ENEMY_A`) vs wanderer (`ENEMY_B`),
+  - atlas now includes dedicated 2-frame enemy death sprites per enemy archetype, wired to crush death FX styles in core/render paths.
+- Added gameplay-pressure HUD/event layer:
+  - timer danger state now activates near timeout with pulse ticks for SFX hook points,
+  - HUD timer now flashes in danger state,
+  - gameplay-area border pulse added during danger pulses.
+- Added combo popup system:
+  - core now emits fixed-size score popups on enemy crush combo scoring,
+  - popups animate upward with deterministic TTL and no heap allocation,
+  - SDL layer renders popup numbers over gameplay.
+- Improved popup readability/presentation:
+  - score popups now render with dark outlines for contrast over busy backgrounds,
+  - popup placement is clamped and lightly staggered to reduce overlap.
+- Improved block readability and push feedback:
+  - pushable blocks now render extra contact/shadow cues against the floor,
+  - moving blocks render stronger trailing contact shadow for clearer slide readability,
+  - player push anticipation now leans one pixel into facing direction with skid marks.
+- Added moving-state readability overlays:
+  - moving `SPECIAL` blocks now get a distinct shimmering accent overlay,
+  - moving `CRACKED` blocks now get animated crack overlays for immediate differentiation.
+- Added enemy spawn readability cue:
+  - spawning enemies now render a short bracket/spark cue while `spawn_ticks` counts down.
+- Added deterministic impact spark cue layer:
+  - core now spawns fixed-size impact effects on block stop contacts and enemy crush impacts,
+  - SDL now renders short-lived spark bursts and triggers a light block-impact SFX hook.
+  - spark style/intensity now varies for normal/special/cracked blocks,
+  - crush impacts now render a brighter cross-flash for readability.
+- Added first roguelite progression layer:
+  - new `GAME_PHASE_PERK_CHOICE` between rounds with 3 perk options and directional selection,
+  - run modifiers now persist across rounds in a run:
+    - `PERK_LIFE_BOOST` (+1 life immediately),
+    - `PERK_TIME_BOOST` (+round time bonus),
+    - `PERK_SCORE_BOOST` (score multiplier),
+    - `PERK_ENEMY_SLOW` (enemy speed penalty),
+  - score awards route through multiplier-aware `award_score`,
+  - run shards now accrue from crushes/items/round clear and bank into meta shards on run reset,
+  - core exposes meta currency API (`game_set_meta_shards` / `game_get_meta_shards`),
+  - SDL now persists meta shards to `assets/meta_shards.sav`.
+- Added new run power-up: mines:
+  - new draftable perk `PERK_MINES` unlocks/expands mine capacity with capped refills,
+  - player can drop mines with a directional double-tap input or dedicated fire input (`Space` / fire button),
+  - mines trigger on enemy contact, chain into nearby mines, kill enemies in blast cross, and destroy breakable blocks.
+  - mine visuals now use animated in-world mine sprites from the consolidated atlas and dedicated mine-blast impact FX, with mine-place and mine-explode SFX hooks.
+  - mines now have timed fuses and auto-detonate after a fixed delay (still chain-reacting and enemy-triggerable).
+- Improved roguelite perk drafting depth:
+  - weighted perk pool favors unowned/lower-level perks,
+  - anti-repeat offer cooldowns reduce immediate rerolls of the same perk set.
+- Added per-stage roguelite mutator events:
+  - `STAGE_MOD_SWARM` increases enemy count/speed/aggression for high-pressure rounds,
+  - `STAGE_MOD_SHATTERED_ICE` converts part of the map's ice into cracked blocks,
+  - `STAGE_MOD_BLACK_ICE` injects extra ice blocks into open lanes,
+  - `STAGE_MOD_TURBO_SLIDE` increases block slide tempo and removes push windup delay,
+  - `STAGE_MOD_FROST_SIREN` tightens round timer pressure and makes timer-danger pulses trigger earlier/faster,
+  - deterministic anti-repeat mutator drafting with run-local cooldown memory,
+  - SDL HUD mutator glyph + intro flash cue + SFX event hook.
+- Added human-playability tuning pass:
+  - slower early-round enemy curve (count/speed/aggression) and longer base round timers,
+  - delayed random mutator drafting until round 3,
+  - gentler pressure values on swarm/black-ice/turbo/frost mutators,
+  - longer enemy spawn grace windows and longer player respawn invulnerability,
+  - default run lives increased to 4.
+- Added second human-speed balancing pass:
+  - player and block movement speeds reduced further for more deliberate lane play,
+  - enemy pursuit/contact pressure reduced (smaller contact overlap threshold + gentler speed ramp),
+  - round 1 now starts at one enemy with slower escalation into mixed enemy rounds,
+  - stage mutator aggression/speed clamps softened to preserve readability under modifier spikes.
+- Added third pacing/reward readability pass:
+  - enemies now use a deterministic per-tile decision cooldown (with small jitter) to avoid relentless instant retargeting,
+  - early rounds now spawn bonus items on lower crush thresholds, while late rounds/surge mutators raise the threshold,
+  - added regression coverage for enemy decision cooldown behavior and early-round bonus threshold behavior.
+- Added pre-run meta progression sink:
+  - new `GAME_PHASE_META_UPGRADE` appears when starting a new run with banked shards,
+  - choose one of four shard-cost upgrades (`life`, `time`, `score`, `enemy-slow`) for that run,
+  - deterministic shuffled offer order with affordability-aware selection,
+  - meta spend now emits `GAME_EVENT_META_SPENT` and persists immediately to save file.
+- Added persistent meta unlock tiers:
+  - meta profile now tracks cumulative progression points from successful meta-upgrade spend,
+  - pre-run meta choice pool now expands over time (`2 -> 3 -> 4` choices) by unlock tier,
+  - `meta_shards.sav` now uses a versioned profile format (`shards` + `progress`) with legacy shard-only migration,
+  - regression tests now cover tier expansion and spend-to-progress linkage.
+- Added roguelite power-up balance pass:
+  - run bonuses now use capped + diminishing progression curves (time/score/enemy-slow) to prevent runaway snowballing,
+  - life growth is capped (`max lives 7`) and perk drafts now suppress fully-capped options,
+  - emergency drafting rule now prioritizes a life option when the run is at critical life even through offer cooldowns,
+  - round timer cap after run bonuses increased to allow early time upgrades to retain value (`up to 150s`),
+  - perk/meta overlay text updated to communicate tapering/max behavior more clearly.
+- Improved upgrade-path UX readability:
+  - perk and meta choice overlays now show explicit phase titles, selected upgrade labels, and control hints,
+  - meta overlay now explicitly communicates affordability and clarifies that `START` can buy or skip.
+- Improved upgrade-path communication pass:
+  - extended 3x5 HUD font coverage (full A-Z plus basic symbols) so overlay text cannot silently drop letters,
+  - perk and meta overlays now show selected upgrade effect text (not just icon + name + cost),
+  - choice overlays now include level/effect/context lines to make run-vs-meta impact easier to parse.
+- Reworked perk/meta choice readability layout:
+  - replaced thin checker bars with high-contrast modal panels and bordered card slots,
+  - centered icon/label/level(cost) stacks per card with explicit selected-card markers,
+  - moved explanation/control text inside modal panel bounds to avoid blending with gameplay background noise.
+- Reworked bottom HUD readability layout:
+  - replaced crowded long labels with compact fixed sections (`SCORE`, `RD`, `TM`, `RN`, `MT`, `MD`, `LV`),
+  - rebalanced separators and value spacing for cleaner scan order and less clipping,
+  - constrained life-heart rendering to visible HUD width so icons no longer run off-screen.
+- Added persistent active-upgrade readout during play:
+  - gameplay overlay now shows current run bonuses in one compact strip (`UP L+ T+ S+ E+`),
+  - values are derived from live run modifiers (life perk level, time bonus, score bonus, enemy slow),
+  - strip only appears when at least one upgrade bonus is active to avoid baseline HUD clutter.
+- Added toggleable detailed-upgrade HUD panel:
+  - `Tab` now toggles compact/expanded upgrade display without affecting gameplay input,
+  - compact mode includes color-coded badge glyphs for active upgrade families (`L/T/S/E`),
+  - expanded mode adds a right-side panel with line-by-line active bonus values for quick run-state auditing.
+- Added higher-frame character animation set (Amiga-safe):
+  - expanded tileset atlas from 20 to 26 sprites with explicit alternate walk/bob frames,
+  - player now has per-direction alternate step frames (`UP/DOWN/LEFT/RIGHT` + `_ALT`),
+  - both enemy archetypes now have alternate bob frames (`ENEMY_A/B` + `_ALT`),
+  - renderer now selects animation variants deterministically from gameplay animation phase with no extra runtime allocations.
+- Smoothed enemy motion pass:
+  - removed heavy per-tile enemy hesitation and kept brief pauses only for low-round intersection decisions,
+  - enemy/player animation frame selection now uses continuous pixel-phase cadence instead of tile-boundary flips,
+  - enemy alternate frames were adjusted to avoid vertical pop/jump artifacts while preserving readable step/bob cues.
+- Added programmatic render tween pass (visual-only, deterministic-core safe):
+  - moving block draw positions now use integer smoothstep easing with a final snap-to-grid threshold near tile completion,
+  - actor rendering keeps linear core pixel motion to avoid quantization stutter on 16px sprites,
+  - gameplay logic/timestep/collision remain unchanged (50 Hz core still authoritative).
+- Added stop-impact snap/bounce for sliding blocks:
+  - impact FX now retain block-anchor metadata (tile + direction) for block-stop events,
+  - stationary pushable blocks apply a short deterministic recoil/overshoot settle tween on impact,
+  - player/enemy render motion remains linear from core pixels to preserve smooth readability.
+- Added deterministic autoplay evaluation agent:
+  - new `icepanic_fun_agent` tool target (`src/tools/fun_agent.c`),
+  - bot can play gameplay/perk/meta phases and gather interaction metrics over seeded batches,
+  - outputs weighted "fun proxy" score (0-100) with component breakdown for tuning loops,
+  - current sample (`24` runs, `18000` ticks, seed `1337`): `arcade 82/100`, `casual 64/100` ("strong signal in arcade profile").
+- Extended autoplay bot behavior to actually deploy mines in threat windows:
+  - bot now opportunistically performs mine-drop double-tap sequences when nearby pressure is high,
+  - keeps mine usage in balance sweeps grounded in actual in-run behavior.
+- Extended autoplay evaluator with profile-aware behavior/scoring:
+  - new `--profile` mode (`arcade`, `casual`, `survival`, `aggressive`),
+  - profile-specific bot pacing (hold/cooldown/idle tuning) for less hold-spam bias,
+  - profile-specific scoring weights and challenge/activity targets.
+- Added machine-readable evaluator output modes:
+  - `--out-format json` emits structured summary payload for tooling/pipelines,
+  - `--out-format csv` emits single-row metric output with stable columns for trend sheets.
+- Added multi-run sweep helper script:
+  - `tools/run_fun_agent_sweep.py` runs profile/seed matrix batches against `icepanic_fun_agent`,
+  - exports one consolidated CSV (stable columns + requested/actual profile-seed metadata),
+  - prints quick per-profile score summary for balancing loops.
+- Added optional sweep JSON summary mode:
+  - `--summary-json <path>` writes aggregate/best/worst/per-profile stats for CI comments.
+- Added sweep trend-delta helper:
+  - new `tools/compare_fun_agent_sweeps.py` compares baseline/candidate sweeps (CSV or summary JSON),
+  - reports overall/per-profile mean fun deltas and optional JSON payload export,
+  - supports CI gate mode with thresholded regression exit codes.
+- Added profile trend history helper:
+  - new `tools/profile_fun_agent_history.py` analyzes multiple sweep snapshots (CSV or summary JSON),
+  - computes rolling-window per-profile mean/stdev/step/swing metrics,
+  - flags unstable profile variance with configurable thresholds and emits optional JSON/CSV outputs.
+- Added trend-based CI instability gate mode:
+  - `tools/profile_fun_agent_history.py --fail-on-unstable` now exits non-zero when unstable profile count exceeds cap,
+  - supports `--max-unstable-profiles` and `--allow-unstable-profiles` for controlled regression policy.
+- Added sparkline PR-summary mode for trend history:
+  - `tools/profile_fun_agent_history.py --pr-summary` prints compact CI/PR-friendly profile trend rows,
+  - includes per-profile ASCII sparkline history over rolling windows (downsampled via `--spark-max-points`),
+  - optional unstable reason rows (`--pr-summary-include-reasons`) for quick triage context.
+- Added compact markdown PR-comment formatter:
+  - `tools/profile_fun_agent_history.py --pr-markdown` emits a markdown table with profile trend sparkline rows,
+  - includes gate status summary header and optional unstable-reason bullets for copy/paste into review threads.
+- Added combined compare+trend CI comment helper:
+  - new `tools/build_fun_agent_ci_comment.py` merges delta JSON + trend JSON into one markdown summary artifact,
+  - includes overall delta status plus per-profile delta/trend/sparkline rows for PR comments.
+- Improved Windows BOM compatibility in bot/eval tooling:
+  - `tools/compare_fun_agent_sweeps.py` now reads CSV/JSON with `utf-8-sig` to handle PowerShell UTF-8 BOM files.
+- Added one-command CI report wrapper:
+  - new `tools/run_fun_agent_ci_report.py` runs compare -> trend -> markdown comment generation in one command,
+  - writes `fun_agent_delta.json`, `fun_agent_trend.json`, and `fun_agent_ci_comment.md` artifacts.
+- Added quiet mode for CI wrapper:
+  - `tools/run_fun_agent_ci_report.py --quiet-subtools` suppresses successful subtool chatter for cleaner logs.
+- Added threshold badge rows for CI markdown summaries:
+  - `tools/build_fun_agent_ci_comment.py --badge-mode text` adds per-profile `PASS/WARN/FAIL` badge column,
+  - badge thresholds are configurable for delta/stdev/swing and unstable-state level,
+  - summary header now includes badge counts for quick scan (`PASS:x WARN:y FAIL:z`).
+- Added badge-threshold passthrough in one-command wrapper:
+  - `tools/run_fun_agent_ci_report.py` now forwards badge-mode and threshold options to markdown generation.
+- Added optional compact CI summary JSON artifact:
+  - `tools/run_fun_agent_ci_report.py --summary-json-name <file>` writes dashboard-friendly summary payload,
+  - includes overall delta/unstable counts, badge counts, threshold config, and artifact paths.
+- Added minimal-log artifact path mode:
+  - `tools/run_fun_agent_ci_report.py --paths-only` now emits only `KEY=path` artifact lines for pipelines.
+- Added human-session evaluator trace capture:
+  - SDL app now supports `--session-metrics-out <path>` to write per-session gameplay/event metrics JSON,
+  - output includes active-input ratio, direction-change rate, round progression, stage-modifier exposure, and event counters for human-vs-bot calibration loops.
+- Fixed moving-block enemy crush reliability:
+  - core crush detection now treats pixel-overlap with the target tile as a valid crush, not only exact enemy tile equality,
+  - this resolves cases where interpolated/mid-move enemies visually intersect a sliding block but previously survived.
+- Added crush regression test for interpolated enemy overlap:
+  - `tests/test_core.c` now includes `test_push_slide_crushes_interpolated_enemy_overlap`.
+- Added turbo-slide tempo regression test:
+  - `tests/test_core.c` now includes `test_stage_modifier_turbo_slide_speeds_blocks`.
+- Captured post-fix bot baseline snapshot after crush + mutator updates:
+  - sample means: `arcade 51.12`, `casual 37.50`, `survival 30.62`, `aggressive 54.62`.
+- Added readability-focused visual language pass:
+  - renderer now adds stronger pushable block silhouette cues (higher-contrast bevel/shadow),
+  - stationary block type overlays improve parsing for ice/special/cracked/unbreakable blocks,
+  - actors now render with drop shadows, and enemies add threat-corner accents for faster danger parsing,
+  - handcrafted tileset floor was darkened/simplified while block faces were brightened for stronger foreground/background separation.
+- Added low-intensity visual mode:
+  - SDL now supports `--low-intensity-viz` to reduce flashing/overlay noise for testing/capture runs.
+- Improved HUD/timer readability pass:
+  - HUD panel now has section separators and outlined digits for better contrast,
+  - timer danger display now uses a stronger outline pulse,
+  - bonus item flash cadence now ramps (steady -> slower flash -> faster final flash).
+- Simplified gameplay HUD pass:
+  - bottom bar now only shows gameplay-critical fields (`score`, `round`, `time`, `mine stock`, `lives`) and removes meta/run clutter from in-round play.
+  - score display now uses full capped value (no modulo truncation) and score accumulation now saturates at `99,999,999` to avoid rollover.
+  - bomb stock is now always visible as `BOMB current:capacity` (including locked/zero states).
+  - HUD now shows a short-lived `+score` gain ticker (for example `+100`) when points are awarded to make scoring feedback explicit.
+- Added bomb discoverability + no-manual onboarding pass:
+  - HUD bomb section now includes a live 8-slot stock/capacity meter with active/empty/locked states,
+  - bomb value coloring now emphasizes ready/empty/locked readability at a glance,
+  - round-intro panel now teaches via sprite/icon lane cues (player movement cluster, push direction, crush spark, mine cue) instead of text instructions.
+- Tightened full loop transition readability/reliability:
+  - `START` is now edge-triggered for phase transitions/confirm flows to prevent held-button accidental skip chains across `GAME_OVER`/meta/perk/new-round intros,
+  - overlay flow guidance now uses animated chevrons + selection arrows across intro/clear/game-over/perk/meta screens (learn-by-doing without control text),
+  - added regression coverage for game-over start-edge restart behavior and hold-to-repeat prevention through meta transition.
+- Upgraded round-intro readability to match upgrade-menu quality:
+  - round intro now uses the same high-contrast modal + framed content-card structure as perk/meta screens (removing noisy checker/transparency bleed),
+  - non-choice status overlays now also use solid modal fills for consistent legibility.
+- Added optional title-graphic overlay pipeline (no separate title screen):
+  - SDL now loads an optional transparent indexed overlay blob (`assets/title_overlay.bin`) and composites it on top of gameplay overlays during intro/loop phases,
+  - overlay draw path supports cutout transparency and light sparkle twinkle on bright pixels,
+  - added conversion helper `tools/build_title_overlay.py` to turn source art into runtime `ITOV` overlay format with crop/fit/chroma/luma cutout controls.
+- Added palette-driven HUD accent tuning table:
+  - centralized HUD/accent palette indices into one table with normal + low-intensity variants,
+  - replaced scattered HUD/upgrade-overlay color literals with named accent entries for easier visual tuning.
+- Added indexed framebuffer dump tool (portability prep):
+  - SDL app supports `--dump-indexed <dir> --dump-max-frames <n>`,
+  - writes palette and raw index8 frame sequence for Amiga blitter prototyping,
+  - dump path reuses the same software-rendered indexed framebuffer as on-screen output.
+- Added Amiga conversion/export helpers:
+  - `tools/convert_frame_dump_to_bitplanes.py` converts dumped index8 frames to 5-bitplane `.bpl` files,
+  - converter emits Amiga 12-bit palette files (`palette_12bit.bin` + `.txt`) and conversion metadata,
+  - `tools/build_tileset.py` now also emits a blitter-friendly tile strip (`assets/tile_strip_16x16_5bpl.bin`),
+  - tile strip export now supports `plane-major` and `row-interleaved` layouts.
+- Added planar validation helper:
+  - `tools/validate_planar_assets.py` verifies tile strip/frame size and decode->encode round-trips,
+  - supports validating `.bpl` frames for both `plane-major` and `row-interleaved` layouts.
+- Added one-shot Amiga bundle helper:
+  - `tools/build_amiga_resource_bundle.py` converts dumped index8 frames directly into one packed bundle (`IAB1`),
+  - bundle includes palette words plus planar frame data for loader integration tests,
+  - helper now supports optional delta-XOR frame packing for streaming experiments.
+- Added tiny C bundle loader sample:
+  - `src/tools/iab_loader_demo.c` parses `IAB1` headers/palette and reconstructs selected frames,
+  - supports both raw and delta-XOR frame storage modes.
+- Added conversion crop/clipping mode:
+  - `tools/convert_frame_dump_to_bitplanes.py` now supports `--crop-x/y/width/height`,
+  - enables partial-screen output for blit-region benchmarking.
+- Added `IAB1` parity checker:
+  - `tools/check_iab_parity.py` reconstructs packed bundle frames (raw or delta-XOR),
+  - decodes back to index8 and compares against source dump frames.
+- Added optional parity report export:
+  - `tools/check_iab_parity.py --report <path>` writes comparison summary and mismatch details.
+- Added deterministic headless frame-dump generator:
+  - `tools/generate_deterministic_frame_dump.py` emits `palette.rgb`, `frame_info.txt`, and deterministic `frame_*.idx` dumps for CI/regression use.
+- Added one-command portability smoke script:
+  - `tools/run_amiga_pipeline_smoke.ps1` runs synth dump -> bundle -> parity checks across
+    `plane-major`/`row-interleaved` and raw/delta-XOR combinations.
+- Added machine-readable parity mode and checksum output:
+  - `tools/check_iab_parity.py --script` emits `PARITY_OK` / `PARITY_FAIL` / `PARITY_ERROR`,
+  - smoke script now prints SHA-256 checksums for generated artifacts before cleanup,
+  - smoke script now also prints one compact aggregate checksum line for report artifacts.
+- Added frame sampling controls to parity/smoke tooling:
+  - `tools/check_iab_parity.py` supports `--start-frame` and `--frame-step`,
+  - smoke script exposes `-StartFrame`, `-SampleStep`, and `-MaxCompareFrames` for faster CI lanes.
+- Added JSON parity output mode:
+  - `tools/check_iab_parity.py --json` emits one-line JSON status objects (`ok` / `fail` / `error`),
+  - smoke script now supports `-ParityMode json`.
+- Added compact PR-summary parity output mode:
+  - `tools/check_iab_parity.py --pr-summary` emits one concise status line for review comments.
+- Added artifact-retention manifest mode in smoke pipeline:
+  - `tools/run_amiga_pipeline_smoke.ps1 -KeepArtifacts` now writes a manifest with file size/hash records,
+  - manifest path is configurable via `-ArtifactManifestPath`.
+- Extended smoke parity mode matrix:
+  - smoke script now supports `-ParityMode pr-summary` in addition to script/json.
+- Added parity report format option:
+  - `tools/check_iab_parity.py --report-format compact` writes short CI-friendly report files.
+- Added smoke passthrough for parity report format:
+  - `tools/run_amiga_pipeline_smoke.ps1 -ReportFormat compact` generates compact per-case parity reports.
+- Added mismatch-line capping for parity failures:
+  - `tools/check_iab_parity.py --report-max-mismatches <n>` limits mismatch lines in console/report output.
+  - smoke script now supports passthrough via `-ReportMaxMismatches`.
+- Added JSON manifest output mode:
+  - `tools/run_amiga_pipeline_smoke.ps1 -ArtifactManifestFormat json` writes machine-readable artifact manifests.
+- Manifest output now writes UTF-8 without BOM for strict JSON parser compatibility.
+- Added deterministic manifest payload checksum:
+  - manifest now includes `manifest_payload_sha256` computed over payload content before checksum insertion,
+  - smoke output prints `HASH_MANIFEST_PAYLOAD` for both text/json manifest formats.
+- Added core event hook path for platform SFX integration:
+  - core now emits lightweight event flags (crush, timer pulse, item collect, death, round transitions),
+  - SDL now consumes per-tick events and dispatches lightweight queued-audio cues.
+- Added arcade feedback SFX pass (slot-machine inspired):
+  - reward/item/alignment/meta moments now use short ascending chime patterns,
+  - stage clear now plays a distinct celebratory jingle,
+  - player death and game-over now play clear descending fail motifs,
+  - impact/mine/start/modifier cues were retuned to keep feedback punchy but readable.
+- Core tests passing:
+  - determinism replay hash,
+  - push/slide/crush behavior,
+  - death state preservation,
+  - round advance,
+  - bonus item spawn threshold,
+  - special alignment rewards,
+  - enemy-type mix per round,
+  - level-row validation logic,
+  - timer danger state activation,
+  - combo popup spawn behavior,
+  - event flag emit/consume behavior for danger pulses, crush, and block-impact,
+  - impact effect spawn behavior on crush/slide-stop,
+  - mine double-tap placement and enemy-triggered blast interactions,
+  - early mine perk offer availability while mines are still locked,
+  - procedural generation mine-blast opportunity coverage invariant,
+  - perk-choice selection/apply behavior,
+  - capped/diminishing perk scaling and emergency low-life draft behavior,
+  - meta shard banking on run reset.
+
+## In Progress Focus
+- Improve readability/arcade feel while keeping Amiga constraints:
+  - tune handcrafted sprite polish and animation readability,
+  - HUD readability in 8px strip,
+  - clearer visual feedback for special events and timed items.
+
+## Next Implementation Tranche
+- Gameplay polish:
+  - add one more readability pass for overlapping popups in multi-crush moments.
+    - done: score popups now spawn with deterministic cluster offsets in core, plus render-time overlap stacking to reduce same-area number collisions.
+    - added regression coverage for spawning a new popup into an existing popup cluster.
+- Bot/eval tuning:
+  - added real-session trace export path in SDL: `--session-metrics-out <path>` now writes per-session gameplay/event metrics JSON for evaluator calibration inputs.
+  - done: captured post-fix recalibration baseline and tuned snapshots:
+    - baseline: `assets/fun_agent_postfix_recalib_baseline.{csv,json}` (`overall_mean 71.625`).
+    - tuned: `assets/fun_agent_postfix_recalib_tuned.{csv,json}` (`overall_mean 70.062`).
+    - delta/trend: `assets/fun_agent_postfix_recalib_delta.json`, `assets/fun_agent_postfix_recalib_trend.json`.
+  - done: evaluator stage-variety scoring now normalizes by average unique stage variants per run (not only union-mask saturation), with per-profile stage targets.
+  - done: per-profile score targets now avoid full score-component saturation after crush reliability fixes (`arcade 42000`, `casual 36000`, `survival 34000`, `aggressive 52000`).
+  - next: run one human-play trace batch with `--session-metrics-out` and retune profile weights against observed human pace/risk signatures.
+- Portability polish:
+  - add optional parity-mode aggregate summary file (`summary.json`) for CI artifact publishing.
+    - done: `tools/run_amiga_pipeline_smoke.ps1` now supports `-ParitySummaryPath` and writes per-case + aggregate status JSON for CI artifacts.
+  - add smoke-script switch to preserve/fail-on-first mismatch case for faster triage.
+    - done: `tools/run_amiga_pipeline_smoke.ps1` now supports `-FailOnFirstMismatch` to stop at first failing case and keep artifacts/manifest for triage.
+
+## Constraints to Preserve
+- 320x200 logical frame.
+- 20x12 grid of 16x16 gameplay tiles.
+- 32-color indexed rendering path.
+- deterministic fixed-step simulation at 50 Hz.
+- no gameplay-loop heap allocations.
+
+## Acceptance Gate For Next Milestone
+- all existing tests remain green,
+- keep tests for enemy archetype behavior and level-load validation green,
+- deterministic replay hash remains stable for fixed seed/input stream.

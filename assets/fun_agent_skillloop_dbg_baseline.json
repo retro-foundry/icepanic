@@ -1,0 +1,73 @@
+{
+  "agent_executable": "build\\Debug\\icepanic_fun_agent.exe",
+  "best_case": {
+    "avg_rounds": 2.833,
+    "avg_score": 28118.0,
+    "fun_score": 64.0,
+    "profile": "casual",
+    "seed": 1344
+  },
+  "csv_output": "assets\\fun_agent_skillloop_dbg_baseline.csv",
+  "generated_utc": "2026-04-23T12:34:42.379993+00:00",
+  "overall": {
+    "max_fun_score": 64.0,
+    "mean_fun_score": 43.875,
+    "min_fun_score": 26.0
+  },
+  "per_profile": {
+    "aggressive": {
+      "count": 8,
+      "max_fun_score": 51.0,
+      "mean_fun_score": 33.75,
+      "min_fun_score": 26.0,
+      "stdev_fun_score": 7.933316
+    },
+    "arcade": {
+      "count": 8,
+      "max_fun_score": 47.0,
+      "mean_fun_score": 38.25,
+      "min_fun_score": 33.0,
+      "stdev_fun_score": 4.993746
+    },
+    "casual": {
+      "count": 8,
+      "max_fun_score": 64.0,
+      "mean_fun_score": 52.75,
+      "min_fun_score": 43.0,
+      "stdev_fun_score": 7.031181
+    },
+    "survival": {
+      "count": 8,
+      "max_fun_score": 61.0,
+      "mean_fun_score": 50.75,
+      "min_fun_score": 44.0,
+      "stdev_fun_score": 6.259992
+    }
+  },
+  "profiles": [
+    "arcade",
+    "casual",
+    "survival",
+    "aggressive"
+  ],
+  "rows": 32,
+  "runs_per_eval": 12,
+  "seeds": [
+    1337,
+    1338,
+    1339,
+    1340,
+    1341,
+    1342,
+    1343,
+    1344
+  ],
+  "ticks_per_run": 12000,
+  "worst_case": {
+    "avg_rounds": 1.083,
+    "avg_score": 12185.167,
+    "fun_score": 26.0,
+    "profile": "aggressive",
+    "seed": 1337
+  }
+}

@@ -16,10 +16,14 @@
 #define GAME_MAX_MOVING_BLOCKS 8
 #define GAME_MAX_SCORE_POPUPS 8
 #define GAME_MAX_IMPACT_FX 12
+#define GAME_MAX_ACTIVE_MINES 8
+#define GAME_MAX_ACTIVE_ITEMS 8
 #define GAME_PERK_CHOICE_COUNT 3
 #define GAME_META_CHOICE_COUNT 4
 #define GAME_META_UNLOCK_TIER2_PROGRESS 10u
 #define GAME_META_UNLOCK_TIER3_PROGRESS 22u
+
+typedef int32_t GamePixelFp;
 
 typedef enum Terrain {
     TERRAIN_FLOOR = 0,
@@ -87,23 +91,23 @@ typedef enum GamePhase {
 
 typedef enum GameEventFlags {
     GAME_EVENT_NONE = 0,
-    GAME_EVENT_CRUSH = 1 << 0,
-    GAME_EVENT_ITEM_COLLECT = 1 << 1,
-    GAME_EVENT_TIMER_DANGER_PULSE = 1 << 2,
-    GAME_EVENT_SPECIAL_ALIGNMENT = 1 << 3,
-    GAME_EVENT_PLAYER_DIED = 1 << 4,
-    GAME_EVENT_ROUND_CLEAR = 1 << 5,
-    GAME_EVENT_ROUND_START = 1 << 6,
-    GAME_EVENT_GAME_OVER = 1 << 7,
-    GAME_EVENT_BLOCK_IMPACT = 1 << 8,
-    GAME_EVENT_META_BANKED = 1 << 9,
-    GAME_EVENT_STAGE_MODIFIER = 1 << 10,
-    GAME_EVENT_META_SPENT = 1 << 11,
-    GAME_EVENT_MINE_PLACED = 1 << 12,
-    GAME_EVENT_MINE_EXPLODED = 1 << 13,
-    GAME_EVENT_LIFE_LOST = 1 << 14,
-    GAME_EVENT_COMBO = 1 << 15,
-    GAME_EVENT_BLOCK_PUSH = 1 << 16
+    GAME_EVENT_CRUSH = 1UL << 0,
+    GAME_EVENT_ITEM_COLLECT = 1UL << 1,
+    GAME_EVENT_TIMER_DANGER_PULSE = 1UL << 2,
+    GAME_EVENT_SPECIAL_ALIGNMENT = 1UL << 3,
+    GAME_EVENT_PLAYER_DIED = 1UL << 4,
+    GAME_EVENT_ROUND_CLEAR = 1UL << 5,
+    GAME_EVENT_ROUND_START = 1UL << 6,
+    GAME_EVENT_GAME_OVER = 1UL << 7,
+    GAME_EVENT_BLOCK_IMPACT = 1UL << 8,
+    GAME_EVENT_META_BANKED = 1UL << 9,
+    GAME_EVENT_STAGE_MODIFIER = 1UL << 10,
+    GAME_EVENT_META_SPENT = 1UL << 11,
+    GAME_EVENT_MINE_PLACED = 1UL << 12,
+    GAME_EVENT_MINE_EXPLODED = 1UL << 13,
+    GAME_EVENT_LIFE_LOST = 1UL << 14,
+    GAME_EVENT_COMBO = 1UL << 15,
+    GAME_EVENT_BLOCK_PUSH = 1UL << 16
 } GameEventFlags;
 
 typedef enum PerkType {
@@ -166,8 +170,8 @@ typedef struct RoundConfig {
 typedef struct Player {
     int tile_x;
     int tile_y;
-    int pixel_fp_x;
-    int pixel_fp_y;
+    GamePixelFp pixel_fp_x;
+    GamePixelFp pixel_fp_y;
     Direction facing;
     Direction move_dir;
     Direction buffered_dir;
@@ -184,8 +188,8 @@ typedef struct Player {
 typedef struct Enemy {
     int tile_x;
     int tile_y;
-    int pixel_fp_x;
-    int pixel_fp_y;
+    GamePixelFp pixel_fp_x;
+    GamePixelFp pixel_fp_y;
     Direction direction;
     EnemyState state;
     int speed_fp;
@@ -200,8 +204,8 @@ typedef struct Enemy {
 typedef struct MovingBlock {
     int tile_x;
     int tile_y;
-    int pixel_fp_x;
-    int pixel_fp_y;
+    GamePixelFp pixel_fp_x;
+    GamePixelFp pixel_fp_y;
     Direction direction;
     int speed_fp;
     int intra_fp;
@@ -212,16 +216,16 @@ typedef struct MovingBlock {
 } MovingBlock;
 
 typedef struct ScorePopup {
-    int pixel_fp_x;
-    int pixel_fp_y;
+    GamePixelFp pixel_fp_x;
+    GamePixelFp pixel_fp_y;
     int value;
     int ttl_ticks;
     bool active;
 } ScorePopup;
 
 typedef struct ImpactFx {
-    int pixel_fp_x;
-    int pixel_fp_y;
+    GamePixelFp pixel_fp_x;
+    GamePixelFp pixel_fp_y;
     int style;
     int base_ttl_ticks;
     int anchor_tile_x;
@@ -239,15 +243,29 @@ typedef struct GameState {
     Terrain terrain[GAME_GRID_HEIGHT][GAME_GRID_WIDTH];
     BlockType blocks[GAME_GRID_HEIGHT][GAME_GRID_WIDTH];
     ItemType items[GAME_GRID_HEIGHT][GAME_GRID_WIDTH];
+    uint8_t active_item_x[GAME_MAX_ACTIVE_ITEMS];
+    uint8_t active_item_y[GAME_MAX_ACTIVE_ITEMS];
+    int active_item_count;
     bool mines[GAME_GRID_HEIGHT][GAME_GRID_WIDTH];
     uint8_t mine_fuse_ticks[GAME_GRID_HEIGHT][GAME_GRID_WIDTH];
+    uint8_t active_mine_x[GAME_MAX_ACTIVE_MINES];
+    uint8_t active_mine_y[GAME_MAX_ACTIVE_MINES];
+    int active_mine_count;
+    uint32_t dirty_static_rows[GAME_GRID_HEIGHT];
 
     Player player;
     Enemy enemies[GAME_MAX_ENEMIES];
     int enemy_count;
+    int alive_enemy_count;
+    uint16_t alive_enemy_mask;
     MovingBlock moving_blocks[GAME_MAX_MOVING_BLOCKS];
+    uint16_t active_moving_block_mask;
     ScorePopup score_popups[GAME_MAX_SCORE_POPUPS];
+    int active_score_popup_count;
+    uint16_t active_score_popup_mask;
     ImpactFx impact_fx[GAME_MAX_IMPACT_FX];
+    int active_impact_fx_count;
+    uint16_t active_impact_fx_mask;
 
     int player_spawn_x;
     int player_spawn_y;
@@ -256,6 +274,7 @@ typedef struct GameState {
     int lives;
     int round;
     int round_time_ticks;
+    int round_clear_pending_ticks;
     int round_clear_bonus_score;
     int kills_this_round;
     int kills_since_item_spawn;
@@ -274,6 +293,7 @@ typedef struct GameState {
     int run_shards;
     uint32_t meta_shards;
     uint32_t meta_progress_points;
+    int meta_unlock_tier;
     StageModifierType stage_modifier;
     int stage_modifier_flash_ticks;
     int stage_modifier_cooldowns[STAGE_MOD_FROST_SIREN + 1];
@@ -298,6 +318,8 @@ typedef struct GameState {
     bool debug_force_procgen_template_pending;
     int debug_last_procgen_template_index;
     bool start_was_down;
+    bool fire_was_down;
+    bool fire_confirm_armed;
     bool start_title_pending;
 
     uint32_t rng_state;
@@ -308,59 +330,14 @@ typedef struct GameState {
     RoundConfig round_config;
 } GameState;
 
-typedef struct RenderState {
-    Terrain terrain[GAME_GRID_HEIGHT][GAME_GRID_WIDTH];
-    BlockType blocks[GAME_GRID_HEIGHT][GAME_GRID_WIDTH];
-    ItemType items[GAME_GRID_HEIGHT][GAME_GRID_WIDTH];
-    bool mines[GAME_GRID_HEIGHT][GAME_GRID_WIDTH];
-    uint8_t mine_fuse_ticks[GAME_GRID_HEIGHT][GAME_GRID_WIDTH];
-
-    Player player;
-    Enemy enemies[GAME_MAX_ENEMIES];
-    int enemy_count;
-    MovingBlock moving_blocks[GAME_MAX_MOVING_BLOCKS];
-    ScorePopup score_popups[GAME_MAX_SCORE_POPUPS];
-    ImpactFx impact_fx[GAME_MAX_IMPACT_FX];
-
-    uint32_t score;
-    int lives;
-    int round;
-    int round_time_ticks;
-    int round_clear_bonus_score;
-    int bonus_item_timer_ticks;
-    int special_alignment_flash_ticks;
-    bool special_alignment_awarded;
-    bool timer_danger_active;
-    int timer_danger_pulse_ticks;
-    int run_shards;
-    uint32_t meta_shards;
-    uint32_t meta_progress_points;
-    int meta_unlock_tier;
-    int run_score_mult_permille;
-    int run_round_time_bonus_ticks;
-    int run_enemy_speed_penalty_fp;
-    int run_mine_capacity;
-    int run_mine_stock;
-    int perk_levels[PERK_MINES + 1];
-    int perk_offer_cooldowns[PERK_MINES + 1];
-    PerkType perk_choices[GAME_PERK_CHOICE_COUNT];
-    int perk_choice_count;
-    int perk_choice_selected;
-    MetaUpgradeType meta_choices[GAME_META_CHOICE_COUNT];
-    int meta_choice_costs[GAME_META_CHOICE_COUNT];
-    int meta_choice_count;
-    int meta_choice_selected;
-    StageModifierType stage_modifier;
-    int stage_modifier_flash_ticks;
-    GamePhase phase;
-    int phase_timer_ticks;
-    bool start_title_pending;
-} RenderState;
+typedef GameState RenderState;
 
 void game_init(GameState *gs, uint32_t seed);
 void game_start_round(GameState *gs, int round_index);
 void game_step(GameState *gs, const InputState *in);
 void game_get_render_state(const GameState *gs, RenderState *out);
+const uint32_t *game_dirty_static_rows(const GameState *gs);
+void game_clear_dirty_static(GameState *gs);
 uint32_t game_consume_events(GameState *gs);
 void game_set_meta_shards(GameState *gs, uint32_t shards);
 uint32_t game_get_meta_shards(const GameState *gs);

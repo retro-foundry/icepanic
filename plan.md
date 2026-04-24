@@ -371,6 +371,11 @@
   - converter emits Amiga 12-bit palette files (`palette_12bit.bin` + `.txt`) and conversion metadata,
   - `tools/build_tileset.py` now also emits a blitter-friendly tile strip (`assets/tile_strip_16x16_5bpl.bin`),
   - tile strip export now supports `plane-major` and `row-interleaved` layouts.
+- Added first Amiga 500 ECS hardware port path:
+  - new `src/platform_amiga` target uses PAL 320x200 5bpl copper display setup and double-buffered chip screens,
+  - generated 5bpl BOB/mask C assets from `assets/tileset.bin` via `tools/build_amiga_bob_assets.py`,
+  - renderer consumes `RenderState`, restores dirty cells, and draws actors/effects with blitter BOBs and CPU HUD text,
+  - `Makefile.amiga` builds a Kickstart 1.3-compatible vbcc executable without touching the SDL/CMake PC target.
 - Added planar validation helper:
   - `tools/validate_planar_assets.py` verifies tile strip/frame size and decode->encode round-trips,
   - supports validating `.bpl` frames for both `plane-major` and `row-interleaved` layouts.

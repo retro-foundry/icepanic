@@ -390,6 +390,13 @@ static void init_empty_playing_arena(GameState *gs) {
     gs->player.alive = true;
 }
 
+static void step_until_phase(GameState *gs, GamePhase phase, int max_ticks) {
+    for (int i = 0; i < max_ticks && gs->phase != phase; ++i) {
+        InputState none = {0};
+        game_step(gs, &none);
+    }
+}
+
 static void build_level_rows_from_state_test(
     const GameState *gs,
     char out_rows[GAME_GRID_HEIGHT][GAME_GRID_WIDTH + 1]) {
@@ -715,6 +722,62 @@ static bool test_push_slide_and_crush(void) {
     return true;
 }
 
+static bool test_stopped_block_dirties_static_when_settle_fx_expires(void) {
+    const char *name = "stopped_block_dirties_static_when_settle_fx_expires";
+    GameState gs;
+    bool settle_seen = false;
+    init_empty_playing_arena(&gs);
+
+    gs.blocks[2][3] = BLOCK_ICE;
+    gs.terrain[2][6] = TERRAIN_WALL;
+    gs.enemy_count = 1;
+    gs.enemies[0].alive = true;
+    gs.enemies[0].state = ENEMY_SPAWNING;
+    gs.enemies[0].tile_x = 16;
+    gs.enemies[0].tile_y = 9;
+    gs.enemies[0].pixel_fp_x = tile_to_fp_test(16);
+    gs.enemies[0].pixel_fp_y = tile_to_fp_test(9);
+    gs.enemies[0].direction = DIR_LEFT;
+    gs.enemies[0].speed_fp = 2 * FP_ONE_TEST;
+    gs.enemies[0].spawn_ticks = 200;
+
+    game_clear_dirty_static(&gs);
+
+    for (int i = 0; i < PUSH_SLIDE_TEST_TICKS; ++i) {
+        InputState in = {0};
+        in.right = true;
+        in.newest_press = (i == 0) ? DIR_RIGHT : DIR_NONE;
+        game_step(&gs, &in);
+        if (gs.blocks[2][5] == BLOCK_ICE) {
+            for (int fx = 0; fx < GAME_MAX_IMPACT_FX; ++fx) {
+                if (gs.impact_fx[fx].active &&
+                    gs.impact_fx[fx].anchors_block &&
+                    gs.impact_fx[fx].anchor_tile_x == 5 &&
+                    gs.impact_fx[fx].anchor_tile_y == 2) {
+                    settle_seen = true;
+                    break;
+                }
+            }
+        }
+        if (settle_seen) {
+            break;
+        }
+    }
+
+    REQUIRE(name, gs.blocks[2][5] == BLOCK_ICE, "pushed block did not stop at expected tile");
+    REQUIRE(name, settle_seen, "stopped block did not create anchored settle effect");
+
+    game_clear_dirty_static(&gs);
+    for (int i = 0; i < PUSH_IMPACT_TEST_TICKS; ++i) {
+        InputState none = {0};
+        game_step(&gs, &none);
+    }
+
+    REQUIRE(name, (game_dirty_static_rows(&gs)[2] & (1u << 5)) != 0u,
+            "settle effect expiry should dirty stopped block static cell");
+    return true;
+}
+
 static bool test_push_slide_crushes_interpolated_enemy_overlap(void) {
     const char *name = "push_slide_crushes_interpolated_enemy_overlap";
     GameState gs;
@@ -808,6 +871,7 @@ static bool test_round_clear_advances_round(void) {
         in.newest_press = (i == 0) ? DIR_RIGHT : DIR_NONE;
         game_step(&gs, &in);
     }
+    step_until_phase(&gs, GAME_PHASE_ROUND_CLEAR, 30);
     REQUIRE(name, gs.phase == GAME_PHASE_ROUND_CLEAR, "round clear phase did not trigger");
 
     const int old_round = gs.round;
@@ -832,6 +896,7 @@ static bool test_round_clear_does_not_require_points(void) {
         InputState none = {0};
         game_step(&gs, &none);
     }
+    step_until_phase(&gs, GAME_PHASE_ROUND_CLEAR, 30);
     REQUIRE(name, gs.phase == GAME_PHASE_ROUND_CLEAR, "enemy wipe should trigger round clear even when score cannot increase");
     REQUIRE(name, gs.score == 99999999u, "score should remain capped during this check");
 
@@ -862,13 +927,58 @@ static bool test_round_clear_tracks_time_bonus_score(void) {
         InputState none = {0};
         game_step(&gs, &none);
     }
+    step_until_phase(&gs, GAME_PHASE_ROUND_CLEAR, 30);
 
     REQUIRE(name, gs.phase == GAME_PHASE_ROUND_CLEAR, "enemy wipe did not trigger round clear");
     {
-        const int expected = ((gs.round_time_ticks * 2) * gs.run_score_mult_permille) / 1000;
+        const int remaining_seconds = (gs.round_time_ticks + GAME_FIXED_TICK_HZ - 1) / GAME_FIXED_TICK_HZ;
+        const int expected = ((remaining_seconds * 100) * gs.run_score_mult_permille) / 1000;
         REQUIRE(name, gs.round_clear_bonus_score == expected, "round clear did not record expected time bonus score");
         REQUIRE(name, gs.score == (uint32_t)expected, "recorded time bonus did not match awarded score");
     }
+    return true;
+}
+
+static bool test_round_clear_pending_stops_timer_and_blocks_player_death(void) {
+    const char *name = "round_clear_pending_stops_timer_and_blocks_player_death";
+    GameState gs;
+    init_empty_playing_arena(&gs);
+
+    gs.enemy_count = 0;
+    gs.round_time_ticks = 2;
+
+    {
+        InputState none = {0};
+        game_step(&gs, &none);
+    }
+
+    REQUIRE(name, gs.phase == GAME_PHASE_PLAYING, "round clear should wait briefly before leaving gameplay");
+    REQUIRE(name, gs.round_clear_pending_ticks > 0, "round clear pending timer did not start");
+    REQUIRE(name, gs.round_time_ticks == 1, "setup tick should leave one second tick for freeze check");
+
+    gs.moving_blocks[0].active = true;
+    gs.moving_blocks[0].type = BLOCK_ICE;
+    gs.moving_blocks[0].tile_x = gs.player.tile_x - 1;
+    gs.moving_blocks[0].tile_y = gs.player.tile_y;
+    gs.moving_blocks[0].pixel_fp_x = tile_to_fp_test(gs.moving_blocks[0].tile_x);
+    gs.moving_blocks[0].pixel_fp_y = tile_to_fp_test(gs.moving_blocks[0].tile_y);
+    gs.moving_blocks[0].direction = DIR_RIGHT;
+    gs.moving_blocks[0].speed_fp = GAME_TILE_SIZE * FP_ONE_TEST;
+    gs.moving_blocks[0].intra_fp = 0;
+
+    {
+        InputState none = {0};
+        game_step(&gs, &none);
+    }
+
+    REQUIRE(name, gs.player.alive, "player should be invincible during round-clear pending delay");
+    REQUIRE(name, gs.phase == GAME_PHASE_PLAYING, "round clear pending delay should remain in gameplay briefly");
+    REQUIRE(name, gs.round_time_ticks == 1, "round timer should stop during round-clear pending delay");
+
+    step_until_phase(&gs, GAME_PHASE_ROUND_CLEAR, 30);
+    REQUIRE(name, gs.phase == GAME_PHASE_ROUND_CLEAR, "round clear phase did not start after pending delay");
+    REQUIRE(name, gs.player.alive, "player should still be alive when round clear starts");
+    REQUIRE(name, gs.round_time_ticks == 1, "round timer should remain frozen until round clear starts");
     return true;
 }
 
@@ -898,6 +1008,61 @@ static bool test_perk_choice_applies_selected_perk(void) {
     REQUIRE(name, gs.lives == 4, "life perk was not applied");
     REQUIRE(name, gs.perk_levels[PERK_LIFE_BOOST] == 1, "life perk level did not increment");
     REQUIRE(name, gs.phase == GAME_PHASE_ROUND_INTRO || gs.phase == GAME_PHASE_PLAYING, "unexpected phase after perk confirm");
+    return true;
+}
+
+static bool test_fire_release_from_round_clear_does_not_skip_perk_choice(void) {
+    const char *name = "fire_release_from_round_clear_does_not_skip_perk_choice";
+    GameState gs;
+    init_empty_playing_arena(&gs);
+
+    gs.phase = GAME_PHASE_ROUND_CLEAR;
+    gs.phase_timer_ticks = 0;
+    gs.round = 1;
+    gs.fire_was_down = true;
+    gs.fire_confirm_armed = false;
+
+    {
+        InputState release = {0};
+        release.fire_released = true;
+        game_step(&gs, &release);
+    }
+
+    REQUIRE(name, gs.phase == GAME_PHASE_PERK_CHOICE, "release used to leave round clear should stop on perk choice");
+    REQUIRE(name, gs.round == 1, "carried fire release should not apply a perk");
+
+    {
+        InputState none = {0};
+        game_step(&gs, &none);
+    }
+    REQUIRE(name, gs.phase == GAME_PHASE_PERK_CHOICE, "idle arming frame should not confirm perk");
+
+    {
+        InputState press = {0};
+        InputState release = {0};
+        press.fire_pressed = true;
+        release.fire_released = true;
+        game_step(&gs, &press);
+        game_step(&gs, &release);
+    }
+    REQUIRE(name, gs.phase == GAME_PHASE_PERK_CHOICE, "perk fire lockout should ignore early fire release");
+    REQUIRE(name, gs.round == 1, "early fire release should not apply a perk during lockout");
+
+    while (gs.phase == GAME_PHASE_PERK_CHOICE && gs.phase_timer_ticks > 0) {
+        InputState none = {0};
+        game_step(&gs, &none);
+    }
+
+    {
+        InputState press = {0};
+        InputState release = {0};
+        press.fire_pressed = true;
+        release.fire_released = true;
+        game_step(&gs, &press);
+        game_step(&gs, &release);
+    }
+
+    REQUIRE(name, gs.round == 2, "fresh fire press/release after lockout should apply perk and start next round");
     return true;
 }
 
@@ -935,6 +1100,36 @@ static bool test_perk_draft_anti_repeat_has_new_offer(void) {
         }
     }
     REQUIRE(name, new_offers >= 1, "second draft should include at least one new perk offer");
+    return true;
+}
+
+static bool test_perk_draft_fills_three_when_fresh_options_are_capped(void) {
+    const char *name = "perk_draft_fills_three_when_fresh_options_are_capped";
+    GameState gs;
+    init_empty_playing_arena(&gs);
+
+    gs.lives = 7;
+    gs.run_round_time_bonus_ticks = 35 * GAME_FIXED_TICK_HZ;
+    gs.run_score_mult_permille = 1000;
+    gs.run_enemy_speed_penalty_fp = 0;
+    gs.run_mine_capacity = 0;
+    gs.run_mine_stock = 0;
+    gs.perk_offer_cooldowns[PERK_SCORE_BOOST] = 2;
+    gs.perk_offer_cooldowns[PERK_ENEMY_SLOW] = 2;
+    gs.perk_offer_cooldowns[PERK_MINES] = 2;
+    gs.phase = GAME_PHASE_ROUND_CLEAR;
+    gs.phase_timer_ticks = 0;
+
+    {
+        InputState none = {0};
+        game_step(&gs, &none);
+    }
+
+    REQUIRE(name, gs.phase == GAME_PHASE_PERK_CHOICE, "perk phase did not start");
+    REQUIRE(name, gs.perk_choice_count == 3, "cooldown fallback should still fill all three perk cards");
+    for (int i = 0; i < gs.perk_choice_count; ++i) {
+        REQUIRE(name, gs.perk_choices[i] != PERK_NONE, "perk card should not be empty");
+    }
     return true;
 }
 
@@ -1612,6 +1807,7 @@ static bool test_bonus_item_spawns_after_crush_threshold(void) {
     }
 
     REQUIRE(name, count_items_on_map(&gs) >= 1, "bonus item did not spawn after crush threshold");
+    REQUIRE(name, gs.active_item_count >= 1, "spawned bonus item was not registered in active item list");
     REQUIRE(name, gs.bonus_item_timer_ticks > 0, "bonus item timer was not started");
     return true;
 }
@@ -2690,13 +2886,17 @@ int main(void) {
     failed += test_determinism_replay() ? 0 : 1;
     failed += test_round_intro_waits_for_input() ? 0 : 1;
     failed += test_push_slide_and_crush() ? 0 : 1;
+    failed += test_stopped_block_dirties_static_when_settle_fx_expires() ? 0 : 1;
     failed += test_push_slide_crushes_interpolated_enemy_overlap() ? 0 : 1;
     failed += test_death_preserves_map_state() ? 0 : 1;
     failed += test_round_clear_advances_round() ? 0 : 1;
     failed += test_round_clear_does_not_require_points() ? 0 : 1;
     failed += test_round_clear_tracks_time_bonus_score() ? 0 : 1;
+    failed += test_round_clear_pending_stops_timer_and_blocks_player_death() ? 0 : 1;
     failed += test_perk_choice_applies_selected_perk() ? 0 : 1;
+    failed += test_fire_release_from_round_clear_does_not_skip_perk_choice() ? 0 : 1;
     failed += test_perk_draft_anti_repeat_has_new_offer() ? 0 : 1;
+    failed += test_perk_draft_fills_three_when_fresh_options_are_capped() ? 0 : 1;
     failed += test_perk_bonus_scaling_applies_caps() ? 0 : 1;
     failed += test_perk_draft_can_skip_when_all_perks_capped() ? 0 : 1;
     failed += test_perk_draft_emergency_life_overrides_cooldown() ? 0 : 1;

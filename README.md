@@ -310,3 +310,52 @@ python tools/build_tileset.py --tile-strip-layout row-interleaved
 ```
 
 If `assets/tileset.bin` is missing, the SDL client falls back to built-in placeholder tiles.
+
+## Amiga ECS Hardware Port
+The Amiga port is a separate vbcc/Kickstart 1.3 build. It does not use CMake and does not affect the PC/SDL binaries.
+
+Prerequisites:
+- `VBCC` points at the Amiga vbcc install, for example `C:\Users\paula\amiga-dev`
+- `%VBCC%\bin` is on `PATH`
+- Python is available for asset generation
+- `xdftool` from `amitools` is on `PATH` for ADF packaging (`python -m pip install amitools`)
+
+Generate the Amiga blitter BOB C assets and packed title overlay from the canonical indexed assets:
+```powershell
+python tools/build_amiga_bob_assets.py
+```
+
+Validate the generated palette/BOB/mask data without writing files:
+```powershell
+python tools/build_amiga_bob_assets.py --validate-only
+```
+
+Build the Kickstart 1.3-compatible Amiga executable and bootable ADF with vbcc:
+```powershell
+make -f Makefile.amiga
+```
+
+The default Amiga build uses vbcc's 16-bit-int Kickstart 1.3 target (`+kick13s`) and is tuned for cycle-exact ECS timing: 50 Hz game logic, 50 Hz rendering, 5bpl blitter BOBs, sprite DMA off, and interleaved planar tile/BOB assets so each tile restore or shifted BOB draw is one blitter job.
+
+This writes:
+- `build/amiga/icepanic_amiga` - Amiga hunk executable for PAL ECS/Kickstart 1.3
+- `build/amiga/icepanic_amiga.adf` - bootable DOS0/OFS disk image for WinUAE or a real Amiga
+- `build/amiga/*.o` - intermediate vbcc objects
+
+In WinUAE, map your joystick or keyboard joystick to Amiga port 2. Port 1 is left for the mouse and is ignored by gameplay input.
+
+If `make` is not installed, run the equivalent PowerShell build directly:
+```powershell
+$ndk = Join-Path $env:VBCC 'NDK_1.3\INCLUDE-STRIP1.3\INCLUDE.H'
+$defs = '-DICEPANIC_AMIGA_SMALL_STACK', '-DAMIGA_FAST_RENDER=1', '-DAMIGA_USE_HW_SPRITES=0', '-DAMIGA_RENDER_DIVISOR=1'
+New-Item -ItemType Directory -Force -Path build\amiga | Out-Null
+vc +kick13s -O1 $defs -Isrc/core -Isrc/platform_amiga "-I$ndk" -c src/core/game.c -o build/amiga/game.o
+vc +kick13 -c99 -O2 $defs -Isrc/core -Isrc/platform_amiga "-I$ndk" -c src/platform_amiga/amiga_assets.c -o build/amiga/amiga_assets.o
+vc +kick13s -O1 $defs -Isrc/core -Isrc/platform_amiga "-I$ndk" -c src/platform_amiga/main.c -o build/amiga/main.o
+vc +kick13s build/amiga/game.o build/amiga/amiga_assets.o build/amiga/main.o -o build/amiga/icepanic_amiga
+python tools/build_amiga_adf.py --exe build/amiga/icepanic_amiga --output build/amiga/icepanic_amiga.adf
+```
+
+The ADF is bootable and runs `SYS:Icepanic` from `S/startup-sequence`.
+
+This target adds a separate `src/platform_amiga` hardware path for PAL ECS Amiga machines. It uses a 320x200 5-bitplane display, renders gameplay actors as blitter BOBs, consumes core dirty cell flags directly instead of copying a full render snapshot every tick, and does not use C2P or hardware sprites.

@@ -19,6 +19,8 @@ enum {
     RESPAWN_INVULN_TICKS = 75,
     PLAYER_DYING_TICKS = 45,
     ROUND_CLEAR_TICKS = 70,
+    ROUND_CLEAR_PENDING_TICKS = 12,
+    PERK_CHOICE_FIRE_LOCK_TICKS = GAME_FIXED_TICK_HZ,
     GAME_OVER_TICKS = 130,
     DEFAULT_LIVES = 4,
     MAX_LIVES = 7,
@@ -45,7 +47,7 @@ enum {
     RUN_SCORE_MULT_MAX_PERMILLE = 1800,
     RUN_TIME_BONUS_MAX_TICKS = 35 * GAME_FIXED_TICK_HZ,
     RUN_ENEMY_SLOW_MAX_FP = (3 * FP_ONE) / 4,
-    RUN_MINE_CAPACITY_MAX = 8,
+    RUN_MINE_CAPACITY_MAX = GAME_MAX_ACTIVE_MINES,
     MINE_PERK_STEP = 2,
     MINE_FUSE_TICKS = 4 * GAME_FIXED_TICK_HZ,
     MINE_EXPLOSION_TTL_TICKS = IMPACT_FX_TICKS + 4,
@@ -90,6 +92,12 @@ static const uint32_t SCORE_CAP = 99999999u;
 typedef struct LevelDef {
     char rows[GAME_GRID_HEIGHT][GAME_GRID_WIDTH + 1];
 } LevelDef;
+
+#ifdef ICEPANIC_AMIGA_SMALL_STACK
+#define ICEPANIC_SCRATCH static
+#else
+#define ICEPANIC_SCRATCH
+#endif
 
 static const LevelDef kDefaultLevels[] = {
     {{
@@ -142,8 +150,104 @@ static const int kDirDy[5] = {0, -1, 1, 0, 0};
 static uint32_t rng_next(GameState *gs);
 static int clampi(int v, int lo, int hi);
 
+static int abs_int_fast(int v) {
+    return (v < 0) ? -v : v;
+}
+
+static int rng_pick_small(GameState *gs, int count) {
+    uint32_t r;
+    if (count <= 1) {
+        return 0;
+    }
+    r = rng_next(gs);
+    if (count == 2) {
+        return (int)(r & 1u);
+    }
+    if (count == 3) {
+        return (int)(((r & 0xFFu) * 3u) >> 8);
+    }
+    return (int)(r & 3u);
+}
+
+static uint16_t slot_bit(int index) {
+    return (uint16_t)((uint16_t)1u << (uint16_t)index);
+}
+
+static uint16_t live_enemy_mask_for_game(const GameState *gs) {
+#if defined(ICEPANIC_AMIGA_SMALL_STACK)
+    return gs->alive_enemy_mask;
+#else
+    uint16_t mask = 0;
+    for (int i = 0; i < gs->enemy_count && i < GAME_MAX_ENEMIES; ++i) {
+        if (gs->enemies[i].alive) {
+            mask |= slot_bit(i);
+        }
+    }
+    return mask;
+#endif
+}
+
+static uint16_t active_moving_block_mask_for_game(const GameState *gs) {
+#if defined(ICEPANIC_AMIGA_SMALL_STACK)
+    return gs->active_moving_block_mask;
+#else
+    uint16_t mask = 0;
+    for (int i = 0; i < GAME_MAX_MOVING_BLOCKS; ++i) {
+        if (gs->moving_blocks[i].active) {
+            mask |= slot_bit(i);
+        }
+    }
+    return mask;
+#endif
+}
+
+static uint16_t active_score_popup_mask_for_game(const GameState *gs) {
+#if defined(ICEPANIC_AMIGA_SMALL_STACK)
+    return gs->active_score_popup_mask;
+#else
+    uint16_t mask = 0;
+    for (int i = 0; i < GAME_MAX_SCORE_POPUPS; ++i) {
+        if (gs->score_popups[i].active) {
+            mask |= slot_bit(i);
+        }
+    }
+    return mask;
+#endif
+}
+
+static uint16_t active_impact_fx_mask_for_game(const GameState *gs) {
+#if defined(ICEPANIC_AMIGA_SMALL_STACK)
+    return gs->active_impact_fx_mask;
+#else
+    uint16_t mask = 0;
+    for (int i = 0; i < GAME_MAX_IMPACT_FX; ++i) {
+        if (gs->impact_fx[i].active) {
+            mask |= slot_bit(i);
+        }
+    }
+    return mask;
+#endif
+}
+
 static void emit_event(GameState *gs, GameEventFlags event_flag) {
     gs->pending_events |= (uint32_t)event_flag;
+}
+
+static void mark_static_cell_dirty(GameState *gs, int x, int y) {
+    if (!gs || x < 0 || y < 0 || x >= GAME_GRID_WIDTH || y >= GAME_GRID_HEIGHT) {
+        return;
+    }
+    gs->dirty_static_rows[y] |= (uint32_t)1u << (uint32_t)x;
+}
+
+static void mark_all_static_dirty(GameState *gs) {
+    int y;
+    if (!gs) {
+        return;
+    }
+    for (y = 0; y < GAME_GRID_HEIGHT; ++y) {
+        gs->dirty_static_rows[y] = (uint32_t)((1UL << GAME_GRID_WIDTH) - 1UL);
+    }
 }
 
 static bool level_char_allowed(char c) {
@@ -271,13 +375,15 @@ static void analyze_reachable_floor_region(
     enum {
         MAX_QUEUE = GAME_GRID_WIDTH * GAME_GRID_HEIGHT
     };
-    bool visited[GAME_GRID_HEIGHT][GAME_GRID_WIDTH] = {{false}};
-    int queue_x[MAX_QUEUE];
-    int queue_y[MAX_QUEUE];
+    ICEPANIC_SCRATCH bool visited[GAME_GRID_HEIGHT][GAME_GRID_WIDTH];
+    ICEPANIC_SCRATCH int queue_x[MAX_QUEUE];
+    ICEPANIC_SCRATCH int queue_y[MAX_QUEUE];
     int head = 0;
     int tail = 0;
     int reachable = 0;
     int junctions = 0;
+
+    memset(visited, 0, sizeof(visited));
 
     if (out_reachable == NULL || out_junctions == NULL) {
         return;
@@ -525,22 +631,27 @@ static void apply_runtime_blocks_from_level_rows(
     const char rows[GAME_GRID_HEIGHT][GAME_GRID_WIDTH + 1]) {
     for (int y = 1; y < GAME_GRID_HEIGHT - 1; ++y) {
         for (int x = 1; x < GAME_GRID_WIDTH - 1; ++x) {
+            BlockType next = BLOCK_NONE;
             switch (rows[y][x]) {
                 case 'I':
-                    gs->blocks[y][x] = BLOCK_ICE;
+                    next = BLOCK_ICE;
                     break;
                 case 'S':
-                    gs->blocks[y][x] = BLOCK_SPECIAL;
+                    next = BLOCK_SPECIAL;
                     break;
                 case 'C':
-                    gs->blocks[y][x] = BLOCK_CRACKED;
+                    next = BLOCK_CRACKED;
                     break;
                 case 'U':
-                    gs->blocks[y][x] = BLOCK_UNBREAKABLE;
+                    next = BLOCK_UNBREAKABLE;
                     break;
                 default:
-                    gs->blocks[y][x] = BLOCK_NONE;
+                    next = BLOCK_NONE;
                     break;
+            }
+            if (gs->blocks[y][x] != next) {
+                gs->blocks[y][x] = next;
+                mark_static_cell_dirty(gs, x, y);
             }
         }
     }
@@ -711,8 +822,8 @@ static int place_unbreakable_signature_blocks(
     enum {
         MAX_CANDIDATES = GAME_GRID_WIDTH * GAME_GRID_HEIGHT
     };
-    int candidate_x[MAX_CANDIDATES];
-    int candidate_y[MAX_CANDIDATES];
+    ICEPANIC_SCRATCH int candidate_x[MAX_CANDIDATES];
+    ICEPANIC_SCRATCH int candidate_y[MAX_CANDIDATES];
     int candidate_count = 0;
     int converted = 0;
     int target = 2;
@@ -830,7 +941,7 @@ static int place_unbreakable_signature_blocks(
 
     while (converted < target && candidate_count > 0) {
         int best_pick = -1;
-        int best_score = -999999;
+        int best_score = -32767;
 
         for (int i = 0; i < candidate_count; ++i) {
             const int cx = candidate_x[i];
@@ -879,7 +990,7 @@ static int place_unbreakable_signature_blocks(
         if (converted < target && round_index >= 2) {
             int neighbor_best_x = -1;
             int neighbor_best_y = -1;
-            int neighbor_best_score = -999999;
+            int neighbor_best_score = -32767;
             const int ax = landmark_x[landmark_count - 1];
             const int ay = landmark_y[landmark_count - 1];
             const int dir_bias = (int)(rng_next(gs) % 4u);
@@ -1097,11 +1208,11 @@ static bool generate_procedural_level_from_template(
     int spawn_x = 2;
     int spawn_y = 2;
     int enemy_markers = 0;
-    int candidate_x[MAX_INTERIOR];
-    int candidate_y[MAX_INTERIOR];
+    ICEPANIC_SCRATCH int candidate_x[MAX_INTERIOR];
+    ICEPANIC_SCRATCH int candidate_y[MAX_INTERIOR];
     int candidate_count = 0;
-    int enemy_x[GAME_MAX_ENEMIES];
-    int enemy_y[GAME_MAX_ENEMIES];
+    ICEPANIC_SCRATCH int enemy_x[GAME_MAX_ENEMIES];
+    ICEPANIC_SCRATCH int enemy_y[GAME_MAX_ENEMIES];
     const int min_spawn_enemy_dist = (round_index <= 5) ? 7 : 6;
 
     if (template_index < 0 || template_index >= PROCGEN_WFC_TEMPLATE_COUNT) {
@@ -1252,7 +1363,7 @@ static bool generate_procedural_level_from_wfc_templates(
         MAX_TEMPLATE_ORDER = 256
     };
     int count = PROCGEN_WFC_TEMPLATE_COUNT;
-    int order[MAX_TEMPLATE_ORDER];
+    ICEPANIC_SCRATCH int order[MAX_TEMPLATE_ORDER];
 
     *out_template_index = -1;
     if (count <= 0) {
@@ -1314,11 +1425,11 @@ static bool generate_procedural_level(GameState *gs, int round_index, LevelDef *
         int spawn_x = 2;
         int spawn_y = 2;
         int enemy_markers = 0;
-        int candidate_x[MAX_INTERIOR];
-        int candidate_y[MAX_INTERIOR];
+        ICEPANIC_SCRATCH int candidate_x[MAX_INTERIOR];
+        ICEPANIC_SCRATCH int candidate_y[MAX_INTERIOR];
         int candidate_count = 0;
-        int enemy_x[GAME_MAX_ENEMIES];
-        int enemy_y[GAME_MAX_ENEMIES];
+        ICEPANIC_SCRATCH int enemy_x[GAME_MAX_ENEMIES];
+        ICEPANIC_SCRATCH int enemy_y[GAME_MAX_ENEMIES];
         int special_target = 3;
         int specials_placed = 0;
         int ice_placed = 0;
@@ -1706,6 +1817,10 @@ static int min_int(int a, int b) {
     return (a < b) ? a : b;
 }
 
+static GamePixelFp abs_fp(GamePixelFp v) {
+    return (v < 0) ? -v : v;
+}
+
 static uint32_t add_u32_saturating(uint32_t base, uint32_t amount) {
     const uint32_t room = UINT32_MAX - base;
     if (amount > room) {
@@ -1714,8 +1829,8 @@ static uint32_t add_u32_saturating(uint32_t base, uint32_t amount) {
     return base + amount;
 }
 
-static int tile_to_fp(int tile) {
-    return tile * GAME_TILE_SIZE * FP_ONE;
+static GamePixelFp tile_to_fp(int tile) {
+    return (GamePixelFp)tile * (GamePixelFp)GAME_TILE_SIZE * (GamePixelFp)FP_ONE;
 }
 
 static bool inside_grid(int x, int y) {
@@ -1741,8 +1856,32 @@ static bool direction_is_held(const InputState *in, Direction dir) {
     }
 }
 
+static void reset_fire_confirm_gate(GameState *gs) {
+    gs->fire_confirm_armed = false;
+}
+
+static bool consume_fire_confirm_release(GameState *gs, const InputState *in) {
+    if (in->fire_released) {
+        const bool confirm = gs->fire_confirm_armed;
+        gs->fire_confirm_armed = false;
+        return confirm;
+    }
+    if (!gs->fire_was_down) {
+        gs->fire_confirm_armed = true;
+    }
+    return false;
+}
+
 static int count_alive_enemies(const GameState *gs) {
     int alive = 0;
+    uint16_t mask = live_enemy_mask_for_game(gs);
+    while (mask != 0u) {
+        alive += (int)(mask & 1u);
+        mask >>= 1;
+    }
+    if (alive > 0 || gs->alive_enemy_count <= 0) {
+        return alive;
+    }
     for (int i = 0; i < gs->enemy_count; ++i) {
         if (gs->enemies[i].alive) {
             ++alive;
@@ -1751,37 +1890,132 @@ static int count_alive_enemies(const GameState *gs) {
     return alive;
 }
 
+static int live_enemy_count_fast(const GameState *gs) {
+#if defined(ICEPANIC_AMIGA_SMALL_STACK)
+    if (gs->alive_enemy_count > 0) {
+        return gs->alive_enemy_count;
+    }
+#endif
+    return count_alive_enemies(gs);
+}
+
+static bool round_clear_pending_active(const GameState *gs) {
+    return gs->phase == GAME_PHASE_PLAYING && gs->round_clear_pending_ticks > 0;
+}
+
 static bool tile_has_enemy(const GameState *gs, int x, int y, int ignore_idx) {
-    for (int i = 0; i < gs->enemy_count; ++i) {
+    int i = 0;
+    uint16_t mask = live_enemy_mask_for_game(gs);
+    while (mask != 0u) {
         if (i == ignore_idx) {
+            mask >>= 1;
+            ++i;
             continue;
         }
-        if (!gs->enemies[i].alive) {
-            continue;
+        if ((mask & 1u) != 0u && gs->enemies[i].tile_x == x && gs->enemies[i].tile_y == y) {
+            return true;
         }
-        if (gs->enemies[i].tile_x == x && gs->enemies[i].tile_y == y) {
+        mask >>= 1;
+        ++i;
+    }
+    if (live_enemy_mask_for_game(gs) != 0u || gs->alive_enemy_count <= 0) {
+        return false;
+    }
+    for (i = 0; i < gs->enemy_count; ++i) {
+        if (i != ignore_idx && gs->enemies[i].alive &&
+            gs->enemies[i].tile_x == x && gs->enemies[i].tile_y == y) {
             return true;
         }
     }
     return false;
+}
+
+static void build_enemy_occupancy(const GameState *gs, uint32_t occupancy[GAME_GRID_HEIGHT]) {
+    int i = 0;
+    uint16_t mask = live_enemy_mask_for_game(gs);
+    memset(occupancy, 0, sizeof(uint32_t) * (size_t)GAME_GRID_HEIGHT);
+    while (mask != 0u) {
+        const Enemy *enemy = &gs->enemies[i];
+        if ((mask & 1u) != 0u && inside_grid(enemy->tile_x, enemy->tile_y)) {
+            occupancy[enemy->tile_y] |= (uint32_t)1u << (uint32_t)enemy->tile_x;
+        }
+        mask >>= 1;
+        ++i;
+    }
+}
+
+static void build_moving_block_occupancy(const GameState *gs, uint32_t occupancy[GAME_GRID_HEIGHT]) {
+    int i = 0;
+    uint16_t mask = active_moving_block_mask_for_game(gs);
+    memset(occupancy, 0, sizeof(uint32_t) * (size_t)GAME_GRID_HEIGHT);
+    while (mask != 0u) {
+        const MovingBlock *mb = &gs->moving_blocks[i];
+        if ((mask & 1u) != 0u && inside_grid(mb->tile_x, mb->tile_y)) {
+            occupancy[mb->tile_y] |= (uint32_t)1u << (uint32_t)mb->tile_x;
+        }
+        mask >>= 1;
+        ++i;
+    }
+}
+
+static bool enemy_occupancy_has(
+    const uint32_t occupancy[GAME_GRID_HEIGHT],
+    int x,
+    int y) {
+    if (!inside_grid(x, y)) {
+        return false;
+    }
+    return (occupancy[y] & ((uint32_t)1u << (uint32_t)x)) != 0;
+}
+
+static void enemy_occupancy_move(
+    uint32_t occupancy[GAME_GRID_HEIGHT],
+    int old_x,
+    int old_y,
+    int new_x,
+    int new_y) {
+    if (inside_grid(old_x, old_y)) {
+        occupancy[old_y] &= ~((uint32_t)1u << (uint32_t)old_x);
+    }
+    if (inside_grid(new_x, new_y)) {
+        occupancy[new_y] |= (uint32_t)1u << (uint32_t)new_x;
+    }
 }
 
 static bool tile_has_moving_block(const GameState *gs, int x, int y, int ignore_idx) {
-    for (int i = 0; i < GAME_MAX_MOVING_BLOCKS; ++i) {
+    int i = 0;
+    uint16_t mask = active_moving_block_mask_for_game(gs);
+    while (mask != 0u) {
         if (i == ignore_idx) {
+            mask >>= 1;
+            ++i;
             continue;
         }
-        if (!gs->moving_blocks[i].active) {
-            continue;
-        }
-        if (gs->moving_blocks[i].tile_x == x && gs->moving_blocks[i].tile_y == y) {
+        if ((mask & 1u) != 0u && gs->moving_blocks[i].tile_x == x && gs->moving_blocks[i].tile_y == y) {
             return true;
         }
+        mask >>= 1;
+        ++i;
     }
     return false;
 }
 
-static bool tile_walkable_for_enemy(const GameState *gs, int x, int y, int enemy_idx) {
+static bool occupancy_has_tile(
+    const uint32_t occupancy[GAME_GRID_HEIGHT],
+    int x,
+    int y) {
+    if (!inside_grid(x, y)) {
+        return false;
+    }
+    return (occupancy[y] & ((uint32_t)1u << (uint32_t)x)) != 0;
+}
+
+static bool tile_walkable_for_enemy_with_occupancy(
+    const GameState *gs,
+    const uint32_t occupancy[GAME_GRID_HEIGHT],
+    const uint32_t moving_block_occupancy[GAME_GRID_HEIGHT],
+    int x,
+    int y) {
     if (!inside_grid(x, y)) {
         return false;
     }
@@ -1791,10 +2025,10 @@ static bool tile_walkable_for_enemy(const GameState *gs, int x, int y, int enemy
     if (gs->blocks[y][x] != BLOCK_NONE) {
         return false;
     }
-    if (tile_has_moving_block(gs, x, y, -1)) {
+    if (occupancy_has_tile(moving_block_occupancy, x, y)) {
         return false;
     }
-    if (tile_has_enemy(gs, x, y, enemy_idx)) {
+    if (enemy_occupancy_has(occupancy, x, y)) {
         return false;
     }
     return true;
@@ -1833,7 +2067,8 @@ static int score_for_combo(int combo_count) {
 }
 
 static int score_for_mine_combo(int combo_count) {
-    int score = (score_for_combo(combo_count) * MINE_KILL_SCORE_PERMILLE) / RUN_SCORE_MULT_BASE_PERMILLE;
+    int score = (int)(((int32_t)score_for_combo(combo_count) * (int32_t)MINE_KILL_SCORE_PERMILLE) /
+                      (int32_t)RUN_SCORE_MULT_BASE_PERMILLE);
     if (score < MINE_KILL_SCORE_MIN) {
         score = MINE_KILL_SCORE_MIN;
     }
@@ -1857,6 +2092,15 @@ static int score_for_item(ItemType type) {
     }
 }
 
+static int round_clear_time_bonus_base_score(int round_time_ticks) {
+    int remaining_seconds;
+    if (round_time_ticks <= 0) {
+        return 0;
+    }
+    remaining_seconds = (round_time_ticks + GAME_FIXED_TICK_HZ - 1) / GAME_FIXED_TICK_HZ;
+    return remaining_seconds * 100;
+}
+
 static int award_score(GameState *gs, int base_score) {
     if (base_score <= 0) {
         return 0;
@@ -1864,7 +2108,9 @@ static int award_score(GameState *gs, int base_score) {
     if (gs->score >= SCORE_CAP) {
         return 0;
     }
-    int scaled = (base_score * gs->run_score_mult_permille) / RUN_SCORE_MULT_BASE_PERMILLE;
+    int32_t scaled32 = ((int32_t)base_score * (int32_t)gs->run_score_mult_permille) /
+                       (int32_t)RUN_SCORE_MULT_BASE_PERMILLE;
+    int scaled = scaled32 > 32767 ? 32767 : (int)scaled32;
     if (scaled <= 0) {
         scaled = 1;
     }
@@ -2075,8 +2321,8 @@ static void apply_stage_modifier_to_map(
     GameState *gs,
     const int enemy_spawns[GAME_MAX_ENEMIES][2],
     int enemy_spawn_count) {
-    int candidates_x[GAME_GRID_WIDTH * GAME_GRID_HEIGHT];
-    int candidates_y[GAME_GRID_WIDTH * GAME_GRID_HEIGHT];
+    ICEPANIC_SCRATCH int candidates_x[GAME_GRID_WIDTH * GAME_GRID_HEIGHT];
+    ICEPANIC_SCRATCH int candidates_y[GAME_GRID_WIDTH * GAME_GRID_HEIGHT];
     int candidate_count = 0;
 
     if (gs->stage_modifier == STAGE_MOD_SHATTERED_ICE) {
@@ -2110,6 +2356,7 @@ static void apply_stage_modifier_to_map(
             const int x = candidates_x[pick];
             const int y = candidates_y[pick];
             gs->blocks[y][x] = BLOCK_CRACKED;
+            mark_static_cell_dirty(gs, x, y);
             candidates_x[pick] = candidates_x[candidate_count - 1];
             candidates_y[pick] = candidates_y[candidate_count - 1];
             --candidate_count;
@@ -2181,6 +2428,7 @@ static void apply_stage_modifier_to_map(
             const int x = candidates_x[pick];
             const int y = candidates_y[pick];
             gs->blocks[y][x] = BLOCK_ICE;
+            mark_static_cell_dirty(gs, x, y);
             candidates_x[pick] = candidates_x[candidate_count - 1];
             candidates_y[pick] = candidates_y[candidate_count - 1];
             --candidate_count;
@@ -2421,6 +2669,7 @@ static void enter_meta_upgrade(GameState *gs) {
     gs->phase = GAME_PHASE_META_UPGRADE;
     gs->phase_timer_ticks = 0;
     gs->pending_round_after_choice = 1;
+    reset_fire_confirm_gate(gs);
     build_meta_choices(gs);
 }
 
@@ -2573,7 +2822,7 @@ static PerkType weighted_pick_perk(GameState *gs, int used_count) {
         if (perk_in_choices(gs, perk, used_count)) {
             continue;
         }
-        if (gs->perk_offer_cooldowns[perk] == 0) {
+        if (gs->perk_offer_cooldowns[perk] == 0 && perk_weight_for_draft(gs, perk, false) > 0) {
             ++fresh_unseen;
         }
     }
@@ -2717,13 +2966,71 @@ static bool apply_perk_choice(GameState *gs, PerkType perk) {
 
 static void enter_perk_choice(GameState *gs, int next_round) {
     gs->phase = GAME_PHASE_PERK_CHOICE;
-    gs->phase_timer_ticks = 0;
+    gs->phase_timer_ticks = PERK_CHOICE_FIRE_LOCK_TICKS;
     gs->pending_round_after_choice = (next_round < 1) ? 1 : next_round;
+    reset_fire_confirm_gate(gs);
     build_perk_choices(gs);
     ensure_early_mine_perk_offer(gs);
 }
 
+static void clear_active_item_list(GameState *gs) {
+    gs->active_item_count = 0;
+    memset(gs->active_item_x, 0, sizeof(gs->active_item_x));
+    memset(gs->active_item_y, 0, sizeof(gs->active_item_y));
+}
+
+static int active_item_slot(const GameState *gs, int x, int y) {
+    int count = gs->active_item_count;
+    if (count > GAME_MAX_ACTIVE_ITEMS) {
+        count = GAME_MAX_ACTIVE_ITEMS;
+    }
+    for (int i = 0; i < count; ++i) {
+        if ((int)gs->active_item_x[i] == x && (int)gs->active_item_y[i] == y) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static bool register_active_item(GameState *gs, int x, int y) {
+    int count = gs->active_item_count;
+    if (active_item_slot(gs, x, y) >= 0) {
+        return true;
+    }
+    if (count < 0 || count >= GAME_MAX_ACTIVE_ITEMS) {
+        return false;
+    }
+    gs->active_item_x[count] = (uint8_t)x;
+    gs->active_item_y[count] = (uint8_t)y;
+    gs->active_item_count = count + 1;
+    return true;
+}
+
+static bool unregister_active_item(GameState *gs, int x, int y) {
+    int slot;
+    int last;
+    if (gs->active_item_count > GAME_MAX_ACTIVE_ITEMS) {
+        gs->active_item_count = GAME_MAX_ACTIVE_ITEMS;
+    }
+    slot = active_item_slot(gs, x, y);
+    if (slot < 0) {
+        return false;
+    }
+    last = gs->active_item_count - 1;
+    if (slot != last) {
+        gs->active_item_x[slot] = gs->active_item_x[last];
+        gs->active_item_y[slot] = gs->active_item_y[last];
+    }
+    gs->active_item_x[last] = 0;
+    gs->active_item_y[last] = 0;
+    gs->active_item_count = last;
+    return true;
+}
+
 static bool has_any_items(const GameState *gs) {
+    if (gs->active_item_count > 0) {
+        return true;
+    }
     for (int y = 0; y < GAME_GRID_HEIGHT; ++y) {
         for (int x = 0; x < GAME_GRID_WIDTH; ++x) {
             if (gs->items[y][x] != ITEM_NONE) {
@@ -2778,8 +3085,8 @@ static bool spawn_bonus_item(GameState *gs, ItemType forced_type) {
         return false;
     }
 
-    int free_x[GAME_GRID_WIDTH * GAME_GRID_HEIGHT];
-    int free_y[GAME_GRID_WIDTH * GAME_GRID_HEIGHT];
+    ICEPANIC_SCRATCH int free_x[GAME_GRID_WIDTH * GAME_GRID_HEIGHT];
+    ICEPANIC_SCRATCH int free_y[GAME_GRID_WIDTH * GAME_GRID_HEIGHT];
     int free_count = 0;
     for (int y = 1; y < GAME_GRID_HEIGHT - 1; ++y) {
         for (int x = 1; x < GAME_GRID_WIDTH - 1; ++x) {
@@ -2798,17 +3105,80 @@ static bool spawn_bonus_item(GameState *gs, ItemType forced_type) {
     const int slot = (int)(rng_next(gs) % (uint32_t)free_count);
     const ItemType type = (forced_type == ITEM_NONE) ? choose_random_item_type(gs) : forced_type;
     gs->items[free_y[slot]][free_x[slot]] = type;
+    register_active_item(gs, free_x[slot], free_y[slot]);
+    mark_static_cell_dirty(gs, free_x[slot], free_y[slot]);
     gs->bonus_item_timer_ticks = BONUS_ITEM_LIFETIME_TICKS;
     return true;
 }
 
 static void clear_bonus_items(GameState *gs) {
-    for (int y = 0; y < GAME_GRID_HEIGHT; ++y) {
-        for (int x = 0; x < GAME_GRID_WIDTH; ++x) {
-            gs->items[y][x] = ITEM_NONE;
+    if (gs->active_item_count > 0) {
+        while (gs->active_item_count > 0) {
+            const int x = (int)gs->active_item_x[gs->active_item_count - 1];
+            const int y = (int)gs->active_item_y[gs->active_item_count - 1];
+            if (inside_grid(x, y) && gs->items[y][x] != ITEM_NONE) {
+                gs->items[y][x] = ITEM_NONE;
+                mark_static_cell_dirty(gs, x, y);
+            }
+            --gs->active_item_count;
+        }
+        memset(gs->active_item_x, 0, sizeof(gs->active_item_x));
+        memset(gs->active_item_y, 0, sizeof(gs->active_item_y));
+    } else {
+        for (int y = 0; y < GAME_GRID_HEIGHT; ++y) {
+            for (int x = 0; x < GAME_GRID_WIDTH; ++x) {
+                if (gs->items[y][x] != ITEM_NONE) {
+                    gs->items[y][x] = ITEM_NONE;
+                    mark_static_cell_dirty(gs, x, y);
+                }
+            }
         }
     }
     gs->bonus_item_timer_ticks = 0;
+}
+
+static void mark_bonus_items_dirty(GameState *gs) {
+    if (gs->active_item_count > 0) {
+        int i = 0;
+        while (i < gs->active_item_count) {
+            const int x = (int)gs->active_item_x[i];
+            const int y = (int)gs->active_item_y[i];
+            if (!inside_grid(x, y) || gs->items[y][x] == ITEM_NONE) {
+                if (i != gs->active_item_count - 1) {
+                    gs->active_item_x[i] = gs->active_item_x[gs->active_item_count - 1];
+                    gs->active_item_y[i] = gs->active_item_y[gs->active_item_count - 1];
+                }
+                --gs->active_item_count;
+                gs->active_item_x[gs->active_item_count] = 0;
+                gs->active_item_y[gs->active_item_count] = 0;
+                continue;
+            }
+            mark_static_cell_dirty(gs, x, y);
+            ++i;
+        }
+        return;
+    }
+
+    for (int y = 0; y < GAME_GRID_HEIGHT; ++y) {
+        for (int x = 0; x < GAME_GRID_WIDTH; ++x) {
+            if (gs->items[y][x] != ITEM_NONE) {
+                mark_static_cell_dirty(gs, x, y);
+            }
+        }
+    }
+}
+
+static bool bonus_item_visible_for_timer(int timer_ticks) {
+    if (timer_ticks <= 0) {
+        return false;
+    }
+    if (timer_ticks > BONUS_ITEM_FLASH_TICKS) {
+        return true;
+    }
+    if (timer_ticks > GAME_FIXED_TICK_HZ) {
+        return ((timer_ticks / 8) & 1) == 0;
+    }
+    return ((timer_ticks / 4) & 1) == 0;
 }
 
 static bool has_special_block_alignment(const GameState *gs) {
@@ -2914,15 +3284,16 @@ static void spawn_score_popup(GameState *gs, int tile_x, int tile_y, int value) 
         {12, -6},
     };
     int slot = -1;
-    int weakest_ttl = 999999;
+    int weakest_ttl = 32767;
     int weakest_index = 0;
-    int base_fp_x = 0;
-    int base_fp_y = 0;
+    GamePixelFp base_fp_x = 0;
+    GamePixelFp base_fp_y = 0;
     int best_offset_idx = 0;
     int best_score = -1;
-    int best_bias = 999999;
+    int best_bias = 32767;
+    uint16_t active_mask = active_score_popup_mask_for_game(gs);
     for (int i = 0; i < GAME_MAX_SCORE_POPUPS; ++i) {
-        if (!gs->score_popups[i].active) {
+        if ((active_mask & slot_bit(i)) == 0u || !gs->score_popups[i].active) {
             slot = i;
             break;
         }
@@ -2935,23 +3306,24 @@ static void spawn_score_popup(GameState *gs, int tile_x, int tile_y, int value) 
         slot = weakest_index;
     }
 
-    base_fp_x = tile_to_fp(tile_x) + ((GAME_TILE_SIZE / 2) * FP_ONE);
-    base_fp_y = tile_to_fp(tile_y) + ((GAME_TILE_SIZE / 2) * FP_ONE);
+    base_fp_x = tile_to_fp(tile_x) + (GamePixelFp)((GAME_TILE_SIZE / 2) * FP_ONE);
+    base_fp_y = tile_to_fp(tile_y) + (GamePixelFp)((GAME_TILE_SIZE / 2) * FP_ONE);
 
     for (int candidate = 0; candidate < (int)(sizeof(kPopupOffsetPx) / sizeof(kPopupOffsetPx[0])); ++candidate) {
-        const int cand_fp_x = base_fp_x + (kPopupOffsetPx[candidate][0] * FP_ONE);
-        const int cand_fp_y = base_fp_y + (kPopupOffsetPx[candidate][1] * FP_ONE);
-        int min_dist = 9999999;
+        const GamePixelFp cand_fp_x = base_fp_x + ((GamePixelFp)kPopupOffsetPx[candidate][0] * (GamePixelFp)FP_ONE);
+        const GamePixelFp cand_fp_y = base_fp_y + ((GamePixelFp)kPopupOffsetPx[candidate][1] * (GamePixelFp)FP_ONE);
+        GamePixelFp min_dist = 9999999;
         bool found_other = false;
         const int bias = abs(kPopupOffsetPx[candidate][0]) + abs(kPopupOffsetPx[candidate][1]);
+        uint16_t popup_mask = active_mask;
 
-        for (int i = 0; i < GAME_MAX_SCORE_POPUPS; ++i) {
+        for (int i = 0; popup_mask != 0u; ++i, popup_mask >>= 1) {
             const ScorePopup *other = &gs->score_popups[i];
-            int dist = 0;
-            if (i == slot || !other->active || other->ttl_ticks <= 0) {
+            GamePixelFp dist = 0;
+            if ((popup_mask & 1u) == 0u || i == slot || !other->active || other->ttl_ticks <= 0) {
                 continue;
             }
-            dist = abs(cand_fp_x - other->pixel_fp_x) + abs(cand_fp_y - other->pixel_fp_y);
+            dist = abs_fp(cand_fp_x - other->pixel_fp_x) + abs_fp(cand_fp_y - other->pixel_fp_y);
             if (dist < min_dist) {
                 min_dist = dist;
             }
@@ -2969,19 +3341,24 @@ static void spawn_score_popup(GameState *gs, int tile_x, int tile_y, int value) 
     }
 
     ScorePopup *popup = &gs->score_popups[slot];
-    popup->pixel_fp_x = base_fp_x + (kPopupOffsetPx[best_offset_idx][0] * FP_ONE);
-    popup->pixel_fp_y = base_fp_y + (kPopupOffsetPx[best_offset_idx][1] * FP_ONE);
+    if (!popup->active) {
+        ++gs->active_score_popup_count;
+    }
+    gs->active_score_popup_mask |= slot_bit(slot);
+    popup->pixel_fp_x = base_fp_x + ((GamePixelFp)kPopupOffsetPx[best_offset_idx][0] * (GamePixelFp)FP_ONE);
+    popup->pixel_fp_y = base_fp_y + ((GamePixelFp)kPopupOffsetPx[best_offset_idx][1] * (GamePixelFp)FP_ONE);
     popup->value = value;
     popup->ttl_ticks = SCORE_POPUP_TICKS;
     popup->active = true;
 }
 
-static ImpactFx *spawn_impact_fx(GameState *gs, int pixel_fp_x, int pixel_fp_y, ImpactFxStyle style, int ttl_ticks) {
+static ImpactFx *spawn_impact_fx(GameState *gs, GamePixelFp pixel_fp_x, GamePixelFp pixel_fp_y, ImpactFxStyle style, int ttl_ticks) {
     int slot = -1;
-    int weakest_ttl = 999999;
+    int weakest_ttl = 32767;
     int weakest_index = 0;
+    uint16_t active_mask = active_impact_fx_mask_for_game(gs);
     for (int i = 0; i < GAME_MAX_IMPACT_FX; ++i) {
-        if (!gs->impact_fx[i].active) {
+        if ((active_mask & slot_bit(i)) == 0u || !gs->impact_fx[i].active) {
             slot = i;
             break;
         }
@@ -2995,6 +3372,15 @@ static ImpactFx *spawn_impact_fx(GameState *gs, int pixel_fp_x, int pixel_fp_y, 
     }
 
     ImpactFx *fx = &gs->impact_fx[slot];
+    if (fx->active &&
+        fx->anchors_block &&
+        inside_grid(fx->anchor_tile_x, fx->anchor_tile_y)) {
+        mark_static_cell_dirty(gs, fx->anchor_tile_x, fx->anchor_tile_y);
+    }
+    if (!fx->active) {
+        ++gs->active_impact_fx_count;
+    }
+    gs->active_impact_fx_mask |= slot_bit(slot);
     fx->pixel_fp_x = pixel_fp_x;
     fx->pixel_fp_y = pixel_fp_y;
     fx->style = (int)style;
@@ -3011,21 +3397,39 @@ static ImpactFx *spawn_impact_fx(GameState *gs, int pixel_fp_x, int pixel_fp_y, 
 static void spawn_impact_fx_on_tile(GameState *gs, int tile_x, int tile_y, ImpactFxStyle style, int ttl_ticks) {
     (void)spawn_impact_fx(
         gs,
-        tile_to_fp(tile_x) + ((GAME_TILE_SIZE / 2) * FP_ONE),
-        tile_to_fp(tile_y) + ((GAME_TILE_SIZE / 2) * FP_ONE),
+        tile_to_fp(tile_x) + (GamePixelFp)((GAME_TILE_SIZE / 2) * FP_ONE),
+        tile_to_fp(tile_y) + (GamePixelFp)((GAME_TILE_SIZE / 2) * FP_ONE),
         style,
         ttl_ticks);
 }
 
 static void update_score_popups(GameState *gs) {
-    for (int i = 0; i < GAME_MAX_SCORE_POPUPS; ++i) {
+    uint16_t mask = active_score_popup_mask_for_game(gs);
+#if defined(ICEPANIC_AMIGA_SMALL_STACK)
+    if (mask == 0u) {
+        return;
+    }
+#endif
+    for (int i = 0; mask != 0u && i < GAME_MAX_SCORE_POPUPS; ++i, mask >>= 1) {
+        uint16_t bit = slot_bit(i);
         ScorePopup *popup = &gs->score_popups[i];
+        if ((mask & 1u) == 0u) {
+            continue;
+        }
         if (!popup->active) {
+            gs->active_score_popup_mask &= (uint16_t)~bit;
+            if (gs->active_score_popup_count > 0) {
+                --gs->active_score_popup_count;
+            }
             continue;
         }
         --popup->ttl_ticks;
         if (popup->ttl_ticks <= 0) {
             popup->active = false;
+            gs->active_score_popup_mask &= (uint16_t)~bit;
+            if (gs->active_score_popup_count > 0) {
+                --gs->active_score_popup_count;
+            }
             continue;
         }
         popup->pixel_fp_y -= SCORE_POPUP_RISE_FP;
@@ -3033,14 +3437,36 @@ static void update_score_popups(GameState *gs) {
 }
 
 static void update_impact_fx(GameState *gs) {
-    for (int i = 0; i < GAME_MAX_IMPACT_FX; ++i) {
+    uint16_t mask = active_impact_fx_mask_for_game(gs);
+#if defined(ICEPANIC_AMIGA_SMALL_STACK)
+    if (mask == 0u) {
+        return;
+    }
+#endif
+    for (int i = 0; mask != 0u && i < GAME_MAX_IMPACT_FX; ++i, mask >>= 1) {
+        uint16_t bit = slot_bit(i);
         ImpactFx *fx = &gs->impact_fx[i];
+        if ((mask & 1u) == 0u) {
+            continue;
+        }
         if (!fx->active) {
+            gs->active_impact_fx_mask &= (uint16_t)~bit;
+            if (gs->active_impact_fx_count > 0) {
+                --gs->active_impact_fx_count;
+            }
             continue;
         }
         --fx->ttl_ticks;
         if (fx->ttl_ticks <= 0) {
+            if (fx->anchors_block &&
+                inside_grid(fx->anchor_tile_x, fx->anchor_tile_y)) {
+                mark_static_cell_dirty(gs, fx->anchor_tile_x, fx->anchor_tile_y);
+            }
             fx->active = false;
+            gs->active_impact_fx_mask &= (uint16_t)~bit;
+            if (gs->active_impact_fx_count > 0) {
+                --gs->active_impact_fx_count;
+            }
             continue;
         }
         fx->pixel_fp_y -= IMPACT_FX_RISE_FP;
@@ -3177,8 +3603,10 @@ static bool tile_is_safe_respawn(const GameState *gs, int x, int y) {
     if (tile_has_enemy(gs, x, y, -1)) {
         return false;
     }
-    for (int i = 0; i < gs->enemy_count; ++i) {
-        if (!gs->enemies[i].alive) {
+    {
+    uint16_t enemy_mask = live_enemy_mask_for_game(gs);
+    for (int i = 0; enemy_mask != 0u && i < gs->enemy_count; ++i, enemy_mask >>= 1) {
+        if ((enemy_mask & 1u) == 0u || !gs->enemies[i].alive) {
             continue;
         }
         const int dx = abs(gs->enemies[i].tile_x - x);
@@ -3186,6 +3614,7 @@ static bool tile_is_safe_respawn(const GameState *gs, int x, int y) {
         if (dx + dy <= 1) {
             return false;
         }
+    }
     }
     return true;
 }
@@ -3228,6 +3657,9 @@ static void kill_player(GameState *gs) {
     if (gs->phase != GAME_PHASE_PLAYING) {
         return;
     }
+    if (round_clear_pending_active(gs)) {
+        return;
+    }
     if (gs->player.respawn_invuln_ticks > 0) {
         return;
     }
@@ -3268,15 +3700,15 @@ static ImpactFxStyle stop_style_for_block(BlockType type) {
 }
 
 static bool enemy_overlaps_tile(const Enemy *enemy, int tile_x, int tile_y) {
-    const int tile_left = tile_to_fp(tile_x);
-    const int tile_top = tile_to_fp(tile_y);
-    const int tile_right = tile_left + TILE_FP;
-    const int tile_bottom = tile_top + TILE_FP;
+    const GamePixelFp tile_left = tile_to_fp(tile_x);
+    const GamePixelFp tile_top = tile_to_fp(tile_y);
+    const GamePixelFp tile_right = tile_left + (GamePixelFp)TILE_FP;
+    const GamePixelFp tile_bottom = tile_top + (GamePixelFp)TILE_FP;
 
-    const int enemy_left = enemy->pixel_fp_x;
-    const int enemy_top = enemy->pixel_fp_y;
-    const int enemy_right = enemy_left + TILE_FP;
-    const int enemy_bottom = enemy_top + TILE_FP;
+    const GamePixelFp enemy_left = enemy->pixel_fp_x;
+    const GamePixelFp enemy_top = enemy->pixel_fp_y;
+    const GamePixelFp enemy_right = enemy_left + (GamePixelFp)TILE_FP;
+    const GamePixelFp enemy_bottom = enemy_top + (GamePixelFp)TILE_FP;
 
     return enemy_left < tile_right &&
            enemy_right > tile_left &&
@@ -3291,15 +3723,21 @@ static void crush_enemies_on_tile(
     int *combo_count,
     BlockType source_block_type,
     bool reduced_score) {
-    for (int i = 0; i < gs->enemy_count; ++i) {
+    uint16_t enemy_mask = live_enemy_mask_for_game(gs);
+    for (int i = 0; enemy_mask != 0u && i < gs->enemy_count; ++i, enemy_mask >>= 1) {
+        uint16_t bit = slot_bit(i);
         Enemy *enemy = &gs->enemies[i];
-        if (!enemy->alive) {
+        if ((enemy_mask & 1u) == 0u || !enemy->alive) {
             continue;
         }
         if ((enemy->tile_x != x || enemy->tile_y != y) && !enemy_overlaps_tile(enemy, x, y)) {
             continue;
         }
         enemy->alive = false;
+        gs->alive_enemy_mask &= (uint16_t)~bit;
+        if (gs->alive_enemy_count > 0) {
+            --gs->alive_enemy_count;
+        }
         enemy->state = ENEMY_CRUSHED;
         spawn_impact_fx_on_tile(
             gs,
@@ -3345,8 +3783,9 @@ static int moving_block_startup_ticks_for_stage(const GameState *gs) {
 }
 
 static bool spawn_moving_block(GameState *gs, int tile_x, int tile_y, Direction dir, BlockType type) {
+    uint16_t active_mask = active_moving_block_mask_for_game(gs);
     for (int i = 0; i < GAME_MAX_MOVING_BLOCKS; ++i) {
-        if (gs->moving_blocks[i].active) {
+        if ((active_mask & slot_bit(i)) != 0u && gs->moving_blocks[i].active) {
             continue;
         }
         MovingBlock *mb = &gs->moving_blocks[i];
@@ -3361,6 +3800,7 @@ static bool spawn_moving_block(GameState *gs, int tile_x, int tile_y, Direction 
         mb->startup_ticks = moving_block_startup_ticks_for_stage(gs);
         mb->type = type;
         mb->active = true;
+        gs->active_moving_block_mask |= slot_bit(i);
         return true;
     }
     return false;
@@ -3376,6 +3816,69 @@ static bool can_start_slide(const GameState *gs, int block_x, int block_y, Direc
         return false;
     }
     return true;
+}
+
+static void clear_active_mine_list(GameState *gs) {
+    gs->active_mine_count = 0;
+    memset(gs->active_mine_x, 0, sizeof(gs->active_mine_x));
+    memset(gs->active_mine_y, 0, sizeof(gs->active_mine_y));
+}
+
+static int active_mine_slot(const GameState *gs, int x, int y) {
+    int count = gs->active_mine_count;
+    if (count > GAME_MAX_ACTIVE_MINES) {
+        count = GAME_MAX_ACTIVE_MINES;
+    }
+    for (int i = 0; i < count; ++i) {
+        if ((int)gs->active_mine_x[i] == x && (int)gs->active_mine_y[i] == y) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static bool register_active_mine(GameState *gs, int x, int y) {
+    int count = gs->active_mine_count;
+    if (active_mine_slot(gs, x, y) >= 0) {
+        return true;
+    }
+    if (count < 0 || count >= GAME_MAX_ACTIVE_MINES) {
+        return false;
+    }
+    gs->active_mine_x[count] = (uint8_t)x;
+    gs->active_mine_y[count] = (uint8_t)y;
+    gs->active_mine_count = count + 1;
+    return true;
+}
+
+static bool unregister_active_mine(GameState *gs, int x, int y) {
+    int slot;
+    int last;
+    if (gs->active_mine_count > GAME_MAX_ACTIVE_MINES) {
+        gs->active_mine_count = GAME_MAX_ACTIVE_MINES;
+    }
+    slot = active_mine_slot(gs, x, y);
+    if (slot < 0) {
+        return false;
+    }
+    last = gs->active_mine_count - 1;
+    if (slot != last) {
+        gs->active_mine_x[slot] = gs->active_mine_x[last];
+        gs->active_mine_y[slot] = gs->active_mine_y[last];
+    }
+    gs->active_mine_x[last] = 0;
+    gs->active_mine_y[last] = 0;
+    gs->active_mine_count = last;
+    return true;
+}
+
+static bool mine_already_queued(const int *queue_x, const int *queue_y, int count, int x, int y) {
+    for (int i = 0; i < count; ++i) {
+        if (queue_x[i] == x && queue_y[i] == y) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static bool try_drop_mine(GameState *gs) {
@@ -3406,6 +3909,12 @@ static bool try_drop_mine(GameState *gs) {
 
     gs->mines[y][x] = true;
     gs->mine_fuse_ticks[y][x] = (uint8_t)MINE_FUSE_TICKS;
+    if (!register_active_mine(gs, x, y)) {
+        gs->mines[y][x] = false;
+        gs->mine_fuse_ticks[y][x] = 0;
+        return false;
+    }
+    mark_static_cell_dirty(gs, x, y);
     gs->run_mine_stock = clampi(gs->run_mine_stock - 1, 0, gs->run_mine_capacity);
     spawn_impact_fx_on_tile(gs, x, y, IMPACT_FX_STYLE_SPECIAL_STOP, IMPACT_FX_TICKS);
     emit_event(gs, GAME_EVENT_MINE_PLACED);
@@ -3424,13 +3933,13 @@ static void consume_queued_mine_drop(GameState *gs) {
 
 static void trigger_mine_explosion(GameState *gs, int start_x, int start_y) {
     enum {
-        MINE_QUEUE_MAX = GAME_GRID_WIDTH * GAME_GRID_HEIGHT
+        MINE_QUEUE_MAX = GAME_MAX_ACTIVE_MINES
     };
     static const int blast_dx[5] = {0, 0, 0, -1, 1};
     static const int blast_dy[5] = {0, -1, 1, 0, 0};
-    bool queued[GAME_GRID_HEIGHT][GAME_GRID_WIDTH] = {{false}};
-    int queue_x[MINE_QUEUE_MAX];
-    int queue_y[MINE_QUEUE_MAX];
+    ICEPANIC_SCRATCH int queue_x[MINE_QUEUE_MAX];
+    ICEPANIC_SCRATCH int queue_y[MINE_QUEUE_MAX];
+
     int head = 0;
     int tail = 0;
     int combo_count = 0;
@@ -3446,7 +3955,6 @@ static void trigger_mine_explosion(GameState *gs, int start_x, int start_y) {
 
     queue_x[tail] = start_x;
     queue_y[tail] = start_y;
-    queued[start_y][start_x] = true;
     ++tail;
 
     while (head < tail) {
@@ -3459,6 +3967,8 @@ static void trigger_mine_explosion(GameState *gs, int start_x, int start_y) {
         }
         gs->mines[my][mx] = false;
         gs->mine_fuse_ticks[my][mx] = 0;
+        unregister_active_mine(gs, mx, my);
+        mark_static_cell_dirty(gs, mx, my);
         exploded = true;
 
         for (int i = 0; i < 5; ++i) {
@@ -3475,6 +3985,8 @@ static void trigger_mine_explosion(GameState *gs, int start_x, int start_y) {
 
             if (gs->items[by][bx] != ITEM_NONE) {
                 gs->items[by][bx] = ITEM_NONE;
+                unregister_active_item(gs, bx, by);
+                mark_static_cell_dirty(gs, bx, by);
             }
             if (gs->blocks[by][bx] == BLOCK_ICE ||
                 gs->blocks[by][bx] == BLOCK_SPECIAL ||
@@ -3483,12 +3995,13 @@ static void trigger_mine_explosion(GameState *gs, int start_x, int start_y) {
                     any_special_change = true;
                 }
                 gs->blocks[by][bx] = BLOCK_NONE;
+                mark_static_cell_dirty(gs, bx, by);
             }
 
             crush_enemies_on_tile(gs, bx, by, &combo_count, BLOCK_SPECIAL, true);
 
-            if (gs->mines[by][bx] && !queued[by][bx] && tail < MINE_QUEUE_MAX) {
-                queued[by][bx] = true;
+            if (gs->mines[by][bx] && tail < MINE_QUEUE_MAX &&
+                !mine_already_queued(queue_x, queue_y, tail, bx, by)) {
                 queue_x[tail] = bx;
                 queue_y[tail] = by;
                 ++tail;
@@ -3508,45 +4021,77 @@ static void trigger_mine_explosion(GameState *gs, int start_x, int start_y) {
     emit_event(gs, GAME_EVENT_BLOCK_IMPACT);
 }
 
+#if defined(ICEPANIC_AMIGA_SMALL_STACK)
+static int amiga_mine_visual_frame_for_fuse(int fuse_ticks);
+#endif
+
 static void update_mine_fuses(GameState *gs) {
-    enum {
-        MINE_AUTO_QUEUE_MAX = GAME_GRID_WIDTH * GAME_GRID_HEIGHT
-    };
-    int queue_x[MINE_AUTO_QUEUE_MAX];
-    int queue_y[MINE_AUTO_QUEUE_MAX];
-    int queue_count = 0;
+    int i = 0;
 
-    for (int y = 0; y < GAME_GRID_HEIGHT; ++y) {
-        for (int x = 0; x < GAME_GRID_WIDTH; ++x) {
-            int fuse = 0;
-            if (!gs->mines[y][x]) {
-                continue;
-            }
+    if (gs->active_mine_count <= 0) {
+        return;
+    }
+    if (gs->active_mine_count > GAME_MAX_ACTIVE_MINES) {
+        gs->active_mine_count = GAME_MAX_ACTIVE_MINES;
+    }
 
-            fuse = gs->mine_fuse_ticks[y][x];
-            if (fuse <= 0) {
-                /* Keep legacy/debug-placed mines deterministic by assigning a default fuse. */
-                fuse = MINE_FUSE_TICKS;
+    while (i < gs->active_mine_count) {
+        const int x = (int)gs->active_mine_x[i];
+        const int y = (int)gs->active_mine_y[i];
+        int fuse;
+
+        if (!inside_grid(x, y) || !gs->mines[y][x]) {
+            if (i != gs->active_mine_count - 1) {
+                gs->active_mine_x[i] = gs->active_mine_x[gs->active_mine_count - 1];
+                gs->active_mine_y[i] = gs->active_mine_y[gs->active_mine_count - 1];
             }
+            --gs->active_mine_count;
+            gs->active_mine_x[gs->active_mine_count] = 0;
+            gs->active_mine_y[gs->active_mine_count] = 0;
+            continue;
+        }
+
+        fuse = gs->mine_fuse_ticks[y][x];
+        if (fuse <= 0) {
+            fuse = MINE_FUSE_TICKS;
+        }
+        {
+#if defined(ICEPANIC_AMIGA_SMALL_STACK)
+            const int old_fuse = fuse;
+#endif
             --fuse;
             gs->mine_fuse_ticks[y][x] = (uint8_t)clampi(fuse, 0, 255);
-
-            if (fuse <= 0 && queue_count < MINE_AUTO_QUEUE_MAX) {
-                queue_x[queue_count] = x;
-                queue_y[queue_count] = y;
-                ++queue_count;
+#if defined(ICEPANIC_AMIGA_SMALL_STACK)
+            if (amiga_mine_visual_frame_for_fuse(old_fuse) != amiga_mine_visual_frame_for_fuse(fuse)) {
+                mark_static_cell_dirty(gs, x, y);
             }
+#else
+            mark_static_cell_dirty(gs, x, y);
+#endif
         }
-    }
 
-    for (int i = 0; i < queue_count; ++i) {
-        const int x = queue_x[i];
-        const int y = queue_y[i];
-        if (gs->mines[y][x]) {
+        if (fuse <= 0) {
             trigger_mine_explosion(gs, x, y);
+            continue;
         }
+        ++i;
     }
 }
+
+#if defined(ICEPANIC_AMIGA_SMALL_STACK)
+static int amiga_mine_visual_frame_for_fuse(int fuse_ticks) {
+    if (fuse_ticks <= 0) {
+        return -1;
+    }
+    if (fuse_ticks <= GAME_FIXED_TICK_HZ) {
+        return (fuse_ticks & 1) ? 1 : 2;
+    }
+    if (fuse_ticks <= 2 * GAME_FIXED_TICK_HZ) {
+        return ((fuse_ticks & 2) == 0) ? 1 : 0;
+    }
+    return ((fuse_ticks & 7) == 0) ? 1 : 0;
+}
+#endif
 
 static void player_bump(Player *player, Direction dir) {
     player->facing = dir;
@@ -3585,6 +4130,7 @@ static bool try_start_player_action(GameState *gs, Direction dir) {
             return false;
         }
         gs->blocks[ny][nx] = BLOCK_NONE;
+        mark_static_cell_dirty(gs, nx, ny);
         player->state = PLAYER_PUSHING;
         player->move_dir = DIR_NONE;
         player->move_remaining_fp = 0;
@@ -3676,8 +4222,8 @@ static void update_player_motion(GameState *gs) {
 
     const int step = min_int(PLAYER_SPEED_FP, player->move_remaining_fp);
     player->move_remaining_fp -= step;
-    player->pixel_fp_x += kDirDx[player->move_dir] * step;
-    player->pixel_fp_y += kDirDy[player->move_dir] * step;
+    player->pixel_fp_x += (GamePixelFp)kDirDx[player->move_dir] * (GamePixelFp)step;
+    player->pixel_fp_y += (GamePixelFp)kDirDy[player->move_dir] * (GamePixelFp)step;
 
     if (player->move_remaining_fp == 0) {
         player->tile_x += kDirDx[player->move_dir];
@@ -3692,10 +4238,16 @@ static void update_player_motion(GameState *gs) {
 
 static void update_moving_blocks(GameState *gs) {
     bool any_block_stopped = false;
+    uint16_t block_mask = active_moving_block_mask_for_game(gs);
 
-    for (int i = 0; i < GAME_MAX_MOVING_BLOCKS; ++i) {
+    for (int i = 0; block_mask != 0u && i < GAME_MAX_MOVING_BLOCKS; ++i, block_mask >>= 1) {
+        uint16_t bit = slot_bit(i);
         MovingBlock *mb = &gs->moving_blocks[i];
+        if ((block_mask & 1u) == 0u) {
+            continue;
+        }
         if (!mb->active) {
+            gs->active_moving_block_mask &= (uint16_t)~bit;
             continue;
         }
 
@@ -3712,10 +4264,11 @@ static void update_moving_blocks(GameState *gs) {
             if (slide_target_blocked(gs, nx, ny, i)) {
                 mb->intra_fp = 0;
                 gs->blocks[mb->tile_y][mb->tile_x] = mb->type;
+                mark_static_cell_dirty(gs, mb->tile_x, mb->tile_y);
                 ImpactFx *stop_fx = spawn_impact_fx(
                     gs,
-                    tile_to_fp(mb->tile_x) + ((GAME_TILE_SIZE / 2) * FP_ONE) + kDirDx[mb->direction] * ((GAME_TILE_SIZE / 2) * FP_ONE),
-                    tile_to_fp(mb->tile_y) + ((GAME_TILE_SIZE / 2) * FP_ONE) + kDirDy[mb->direction] * ((GAME_TILE_SIZE / 2) * FP_ONE),
+                    tile_to_fp(mb->tile_x) + (GamePixelFp)((GAME_TILE_SIZE / 2) * FP_ONE) + (GamePixelFp)kDirDx[mb->direction] * (GamePixelFp)((GAME_TILE_SIZE / 2) * FP_ONE),
+                    tile_to_fp(mb->tile_y) + (GamePixelFp)((GAME_TILE_SIZE / 2) * FP_ONE) + (GamePixelFp)kDirDy[mb->direction] * (GamePixelFp)((GAME_TILE_SIZE / 2) * FP_ONE),
                     stop_style_for_block(mb->type),
                     IMPACT_FX_TICKS);
                 stop_fx->anchor_tile_x = mb->tile_x;
@@ -3724,6 +4277,7 @@ static void update_moving_blocks(GameState *gs) {
                 stop_fx->anchors_block = true;
                 emit_event(gs, GAME_EVENT_BLOCK_IMPACT);
                 mb->active = false;
+                gs->active_moving_block_mask &= (uint16_t)~bit;
                 any_block_stopped = true;
                 break;
             }
@@ -3734,10 +4288,13 @@ static void update_moving_blocks(GameState *gs) {
 
             if (gs->items[ny][nx] != ITEM_NONE) {
                 gs->items[ny][nx] = ITEM_NONE;
+                unregister_active_item(gs, nx, ny);
+                mark_static_cell_dirty(gs, nx, ny);
             }
 
             crush_enemies_on_tile(gs, nx, ny, &mb->combo_count, mb->type, false);
-            if (gs->player.alive && gs->player.tile_x == nx && gs->player.tile_y == ny) {
+            if (!round_clear_pending_active(gs) &&
+                gs->player.alive && gs->player.tile_x == nx && gs->player.tile_y == ny) {
                 kill_player(gs);
             }
 
@@ -3746,8 +4303,8 @@ static void update_moving_blocks(GameState *gs) {
         }
 
         if (mb->active) {
-            mb->pixel_fp_x = tile_to_fp(mb->tile_x) + kDirDx[mb->direction] * mb->intra_fp;
-            mb->pixel_fp_y = tile_to_fp(mb->tile_y) + kDirDy[mb->direction] * mb->intra_fp;
+            mb->pixel_fp_x = tile_to_fp(mb->tile_x) + (GamePixelFp)kDirDx[mb->direction] * (GamePixelFp)mb->intra_fp;
+            mb->pixel_fp_y = tile_to_fp(mb->tile_y) + (GamePixelFp)kDirDy[mb->direction] * (GamePixelFp)mb->intra_fp;
         } else {
             mb->pixel_fp_x = tile_to_fp(mb->tile_x);
             mb->pixel_fp_y = tile_to_fp(mb->tile_y);
@@ -3759,7 +4316,11 @@ static void update_moving_blocks(GameState *gs) {
     }
 }
 
-static int enemy_decision_pause_ticks(const GameState *gs, int enemy_idx) {
+static int enemy_decision_pause_ticks(
+    const GameState *gs,
+    int enemy_idx,
+    const uint32_t occupancy[GAME_GRID_HEIGHT],
+    const uint32_t moving_block_occupancy[GAME_GRID_HEIGHT]) {
     const Enemy *enemy = &gs->enemies[enemy_idx];
     Direction valid[4];
     int valid_count = 0;
@@ -3770,7 +4331,7 @@ static int enemy_decision_pause_ticks(const GameState *gs, int enemy_idx) {
     for (Direction d = DIR_UP; d <= DIR_RIGHT; d = (Direction)(d + 1)) {
         const int nx = enemy->tile_x + kDirDx[d];
         const int ny = enemy->tile_y + kDirDy[d];
-        if (!tile_walkable_for_enemy(gs, nx, ny, enemy_idx)) {
+        if (!tile_walkable_for_enemy_with_occupancy(gs, occupancy, moving_block_occupancy, nx, ny)) {
             continue;
         }
         valid[valid_count++] = d;
@@ -3808,8 +4369,8 @@ static void enemy_step_movement(Enemy *enemy) {
     }
     const int step = min_int(enemy->speed_fp, enemy->move_remaining_fp);
     enemy->move_remaining_fp -= step;
-    enemy->pixel_fp_x += kDirDx[enemy->direction] * step;
-    enemy->pixel_fp_y += kDirDy[enemy->direction] * step;
+    enemy->pixel_fp_x += (GamePixelFp)kDirDx[enemy->direction] * (GamePixelFp)step;
+    enemy->pixel_fp_y += (GamePixelFp)kDirDy[enemy->direction] * (GamePixelFp)step;
 
     if (enemy->move_remaining_fp == 0) {
         enemy->tile_x += kDirDx[enemy->direction];
@@ -3820,14 +4381,18 @@ static void enemy_step_movement(Enemy *enemy) {
     }
 }
 
-static Direction choose_enemy_direction(GameState *gs, int enemy_idx) {
+static Direction choose_enemy_direction(
+    GameState *gs,
+    int enemy_idx,
+    const uint32_t occupancy[GAME_GRID_HEIGHT],
+    const uint32_t moving_block_occupancy[GAME_GRID_HEIGHT]) {
     Enemy *enemy = &gs->enemies[enemy_idx];
     Direction valid[4];
     int valid_count = 0;
     for (Direction d = DIR_UP; d <= DIR_RIGHT; d = (Direction)(d + 1)) {
         const int nx = enemy->tile_x + kDirDx[d];
         const int ny = enemy->tile_y + kDirDy[d];
-        if (!tile_walkable_for_enemy(gs, nx, ny, enemy_idx)) {
+        if (!tile_walkable_for_enemy_with_occupancy(gs, occupancy, moving_block_occupancy, nx, ny)) {
             continue;
         }
         valid[valid_count++] = d;
@@ -3856,15 +4421,21 @@ static Direction choose_enemy_direction(GameState *gs, int enemy_idx) {
         chase_percent = gs->round_config.aggression_percent / 3;
     }
 
+#if defined(ICEPANIC_AMIGA_SMALL_STACK)
+    const int chase_roll = (int)(rng_next(gs) & 0xFFu);
+    const int chase_threshold = (chase_percent >= 100) ? 256 : ((chase_percent <= 0) ? 0 : ((chase_percent * 41) >> 4));
+    if (gs->player.alive && chase_roll < chase_threshold) {
+#else
     const int chase_roll = (int)(rng_next(gs) % 100u);
     if (gs->player.alive && chase_roll < chase_percent) {
+#endif
         int best_distance = 9999;
         Direction best_dir = valid[0];
         for (int i = 0; i < valid_count; ++i) {
             const Direction d = valid[i];
             const int nx = enemy->tile_x + kDirDx[d];
             const int ny = enemy->tile_y + kDirDy[d];
-            const int dist = abs(gs->player.tile_x - nx) + abs(gs->player.tile_y - ny);
+            const int dist = abs_int_fast(gs->player.tile_x - nx) + abs_int_fast(gs->player.tile_y - ny);
             if (dist < best_distance) {
                 best_distance = dist;
                 best_dir = d;
@@ -3873,13 +4444,33 @@ static Direction choose_enemy_direction(GameState *gs, int enemy_idx) {
         return best_dir;
     }
 
+#if defined(ICEPANIC_AMIGA_SMALL_STACK)
+    return valid[rng_pick_small(gs, valid_count)];
+#else
     return valid[rng_next(gs) % (uint32_t)valid_count];
+#endif
 }
 
 static void update_enemies(GameState *gs) {
-    for (int i = 0; i < gs->enemy_count; ++i) {
+    ICEPANIC_SCRATCH uint32_t enemy_occupancy[GAME_GRID_HEIGHT];
+    ICEPANIC_SCRATCH uint32_t moving_block_occupancy[GAME_GRID_HEIGHT];
+    uint16_t enemy_mask;
+#if defined(ICEPANIC_AMIGA_SMALL_STACK)
+    if (gs->alive_enemy_count <= 0) {
+        return;
+    }
+#endif
+    build_enemy_occupancy(gs, enemy_occupancy);
+    build_moving_block_occupancy(gs, moving_block_occupancy);
+    enemy_mask = live_enemy_mask_for_game(gs);
+
+    for (int i = 0; enemy_mask != 0u && i < gs->enemy_count; ++i, enemy_mask >>= 1) {
+        uint16_t bit = slot_bit(i);
         Enemy *enemy = &gs->enemies[i];
-        if (!enemy->alive) {
+        if ((enemy_mask & 1u) == 0u || !enemy->alive) {
+            if (!enemy->alive) {
+                gs->alive_enemy_mask &= (uint16_t)~bit;
+            }
             continue;
         }
 
@@ -3890,21 +4481,33 @@ static void update_enemies(GameState *gs) {
                 enemy->decision_cooldown_ticks = 0;
                 if (gs->mines[enemy->tile_y][enemy->tile_x]) {
                     trigger_mine_explosion(gs, enemy->tile_x, enemy->tile_y);
+                    build_enemy_occupancy(gs, enemy_occupancy);
                 }
             }
             continue;
         }
 
         if (enemy->move_remaining_fp > 0) {
+            const int old_tile_x = enemy->tile_x;
+            const int old_tile_y = enemy->tile_y;
             enemy_step_movement(enemy);
+            if (old_tile_x != enemy->tile_x || old_tile_y != enemy->tile_y) {
+                enemy_occupancy_move(
+                    enemy_occupancy,
+                    old_tile_x,
+                    old_tile_y,
+                    enemy->tile_x,
+                    enemy->tile_y);
+            }
             if (enemy->move_remaining_fp == 0) {
                 if (gs->mines[enemy->tile_y][enemy->tile_x]) {
                     trigger_mine_explosion(gs, enemy->tile_x, enemy->tile_y);
+                    build_enemy_occupancy(gs, enemy_occupancy);
                     if (!enemy->alive) {
                         continue;
                     }
                 }
-                enemy->decision_cooldown_ticks = enemy_decision_pause_ticks(gs, i);
+                enemy->decision_cooldown_ticks = enemy_decision_pause_ticks(gs, i, enemy_occupancy, moving_block_occupancy);
             }
             continue;
         }
@@ -3914,7 +4517,7 @@ static void update_enemies(GameState *gs) {
             continue;
         }
 
-        enemy->direction = choose_enemy_direction(gs, i);
+        enemy->direction = choose_enemy_direction(gs, i, enemy_occupancy, moving_block_occupancy);
         if (enemy->direction == DIR_NONE) {
             enemy->decision_cooldown_ticks = 0;
             continue;
@@ -3926,9 +4529,13 @@ static void update_enemies(GameState *gs) {
 
 static void update_bonus_item_timer(GameState *gs) {
     if (gs->bonus_item_timer_ticks > 0) {
+        const int old_timer = gs->bonus_item_timer_ticks;
         --gs->bonus_item_timer_ticks;
         if (gs->bonus_item_timer_ticks <= 0) {
             clear_bonus_items(gs);
+        } else if (old_timer <= BONUS_ITEM_FLASH_TICKS &&
+                   bonus_item_visible_for_timer(old_timer) != bonus_item_visible_for_timer(gs->bonus_item_timer_ticks)) {
+            mark_bonus_items_dirty(gs);
         }
     }
     if (gs->special_alignment_flash_ticks > 0) {
@@ -3940,10 +4547,20 @@ static void resolve_player_enemy_collision(GameState *gs) {
     if (!gs->player.alive || gs->player.respawn_invuln_ticks > 0) {
         return;
     }
+    if (round_clear_pending_active(gs)) {
+        return;
+    }
+#if defined(ICEPANIC_AMIGA_SMALL_STACK)
+    if (gs->alive_enemy_count <= 0) {
+        return;
+    }
+#endif
 
-    for (int i = 0; i < gs->enemy_count; ++i) {
+    {
+    uint16_t enemy_mask = live_enemy_mask_for_game(gs);
+    for (int i = 0; enemy_mask != 0u && i < gs->enemy_count; ++i, enemy_mask >>= 1) {
         const Enemy *enemy = &gs->enemies[i];
-        if (!enemy->alive) {
+        if ((enemy_mask & 1u) == 0u || !enemy->alive) {
             continue;
         }
 
@@ -3952,12 +4569,13 @@ static void resolve_player_enemy_collision(GameState *gs) {
             return;
         }
 
-        const int dx = abs(enemy->pixel_fp_x - gs->player.pixel_fp_x);
-        const int dy = abs(enemy->pixel_fp_y - gs->player.pixel_fp_y);
+        const GamePixelFp dx = abs_fp(enemy->pixel_fp_x - gs->player.pixel_fp_x);
+        const GamePixelFp dy = abs_fp(enemy->pixel_fp_y - gs->player.pixel_fp_y);
         if (dx < PLAYER_ENEMY_CONTACT_THRESHOLD_FP && dy < PLAYER_ENEMY_CONTACT_THRESHOLD_FP) {
             kill_player(gs);
             return;
         }
+    }
     }
 }
 
@@ -3981,6 +4599,8 @@ static void resolve_item_collection(GameState *gs) {
     }
     emit_event(gs, GAME_EVENT_ITEM_COLLECT);
     *item = ITEM_NONE;
+    unregister_active_item(gs, gs->player.tile_x, gs->player.tile_y);
+    mark_static_cell_dirty(gs, gs->player.tile_x, gs->player.tile_y);
     if (!has_any_items(gs)) {
         gs->bonus_item_timer_ticks = 0;
     }
@@ -3990,22 +4610,36 @@ static void check_round_clear(GameState *gs) {
     if (gs->phase != GAME_PHASE_PLAYING) {
         return;
     }
-    if (count_alive_enemies(gs) != 0) {
+    if (live_enemy_count_fast(gs) != 0) {
+        gs->round_clear_pending_ticks = 0;
+        return;
+    }
+    if (gs->round_clear_pending_ticks <= 0) {
+        gs->round_clear_pending_ticks = ROUND_CLEAR_PENDING_TICKS;
+        return;
+    }
+    --gs->round_clear_pending_ticks;
+    if (gs->round_clear_pending_ticks > 0) {
         return;
     }
 
     gs->phase = GAME_PHASE_ROUND_CLEAR;
     gs->phase_timer_ticks = ROUND_CLEAR_TICKS;
     gs->player.state = PLAYER_VICTORY;
-    gs->round_clear_bonus_score = award_score(gs, gs->round_time_ticks * 2);
+    gs->round_clear_bonus_score = award_score(gs, round_clear_time_bonus_base_score(gs->round_time_ticks));
     add_run_shards(gs, SHARDS_PER_ROUND_CLEAR);
+    reset_fire_confirm_gate(gs);
     emit_event(gs, GAME_EVENT_ROUND_CLEAR);
 }
 
-static void update_perk_choice(GameState *gs, const InputState *in, bool start_released) {
+static void update_perk_choice(GameState *gs, const InputState *in, bool start_released, bool fire_confirm_released) {
     if (gs->perk_choice_count <= 0) {
         game_start_round(gs, gs->pending_round_after_choice);
         return;
+    }
+
+    if (gs->phase_timer_ticks > 0) {
+        --gs->phase_timer_ticks;
     }
 
     if (in->newest_press == DIR_LEFT || in->newest_press == DIR_UP) {
@@ -4020,7 +4654,11 @@ static void update_perk_choice(GameState *gs, const InputState *in, bool start_r
         }
     }
 
-    if (!start_released && !in->fire_released) {
+    if (gs->phase_timer_ticks > 0) {
+        fire_confirm_released = false;
+    }
+
+    if (!start_released && !fire_confirm_released) {
         return;
     }
 
@@ -4031,11 +4669,14 @@ static void update_perk_choice(GameState *gs, const InputState *in, bool start_r
     game_start_round(gs, gs->pending_round_after_choice);
 }
 
-static void update_meta_upgrade_choice(GameState *gs, const InputState *in) {
+static void update_meta_upgrade_choice(GameState *gs, const InputState *in, bool fire_confirm_released) {
     if (gs->meta_choice_count <= 0 || gs->meta_shards == 0u) {
         game_start_round(gs, 1);
         return;
     }
+#if !defined(ICEPANIC_AMIGA_SMALL_STACK)
+    (void)fire_confirm_released;
+#endif
 
     if (in->newest_press == DIR_LEFT || in->newest_press == DIR_UP) {
         gs->meta_choice_selected -= 1;
@@ -4049,9 +4690,15 @@ static void update_meta_upgrade_choice(GameState *gs, const InputState *in) {
         }
     }
 
+#if defined(ICEPANIC_AMIGA_SMALL_STACK)
+    if (!in->start && !fire_confirm_released) {
+        return;
+    }
+#else
     if (!in->start) {
         return;
     }
+#endif
 
     if (gs->meta_choice_selected < 0 || gs->meta_choice_selected >= gs->meta_choice_count) {
         gs->meta_choice_selected = 0;
@@ -4066,6 +4713,7 @@ static void update_meta_upgrade_choice(GameState *gs, const InputState *in) {
             if (apply_meta_upgrade_choice(gs, upgrade)) {
                 gs->meta_shards -= (uint32_t)cost;
                 gs->meta_progress_points = add_u32_saturating(gs->meta_progress_points, (uint32_t)cost);
+                gs->meta_unlock_tier = meta_unlock_tier_from_progress(gs->meta_progress_points);
                 spent = true;
             }
         }
@@ -4081,6 +4729,7 @@ static void handle_player_death_transition(GameState *gs) {
     if (gs->lives <= 0) {
         gs->phase = GAME_PHASE_GAME_OVER;
         gs->phase_timer_ticks = GAME_OVER_TICKS;
+        reset_fire_confirm_gate(gs);
         emit_event(gs, GAME_EVENT_GAME_OVER);
         return;
     }
@@ -4093,6 +4742,7 @@ static void handle_player_death_transition(GameState *gs) {
     gs->phase = GAME_PHASE_ROUND_INTRO;
     gs->phase_timer_ticks = RESPAWN_INTRO_TICKS;
     gs->start_title_pending = false;
+    reset_fire_confirm_gate(gs);
 }
 
 static bool bank_run_shards(GameState *gs) {
@@ -4204,7 +4854,7 @@ static bool find_runtime_enemy_spawn_relocation(
     int min_spawn_separation,
     int *out_x,
     int *out_y) {
-    int best_score = -999999;
+    int best_score = -32767;
     int best_x = -1;
     int best_y = -1;
 
@@ -4331,6 +4981,7 @@ static void ensure_spawn_runtime_floor_exits(
         }
         gs->terrain[ny][nx] = TERRAIN_FLOOR;
         gs->blocks[ny][nx] = BLOCK_NONE;
+        mark_static_cell_dirty(gs, nx, ny);
 
         if (count_runtime_walkable_neighbors(gs, enemy_spawns, enemy_spawn_count, spawn_x, spawn_y) >= min_exits) {
             return;
@@ -4443,6 +5094,7 @@ static bool try_place_runtime_push_block_near_tile(
         }
 
         gs->blocks[by][bx] = BLOCK_ICE;
+        mark_static_cell_dirty(gs, bx, by);
         return true;
     }
     return false;
@@ -4519,13 +5171,57 @@ static void enforce_spawn_opening_protection(
     ensure_spawn_has_nearby_push_option(gs, enemy_spawns, enemy_spawn_count);
 }
 
+static void ensure_enemy_spawn_capacity(
+    GameState *gs,
+    int enemy_spawns[GAME_MAX_ENEMIES][2],
+    int *enemy_spawn_count,
+    int target_count) {
+    const int base_min_dist = (gs->round <= 3) ? 8 : ((gs->round <= 7) ? 7 : 6);
+    const int spawn_x = gs->player_spawn_x;
+    const int spawn_y = gs->player_spawn_y;
+
+    while (*enemy_spawn_count < target_count && *enemy_spawn_count < GAME_MAX_ENEMIES) {
+        int nx = 0;
+        int ny = 0;
+        bool found = false;
+
+        for (int min_dist = base_min_dist; min_dist >= 2 && !found; --min_dist) {
+            for (int min_sep = 3; min_sep >= 1 && !found; --min_sep) {
+                found = find_runtime_enemy_spawn_relocation(
+                    gs,
+                    enemy_spawns,
+                    *enemy_spawn_count,
+                    -1,
+                    spawn_x,
+                    spawn_y,
+                    min_dist,
+                    min_sep,
+                    &nx,
+                    &ny);
+            }
+        }
+
+        if (!found) {
+            break;
+        }
+
+        enemy_spawns[*enemy_spawn_count][0] = nx;
+        enemy_spawns[*enemy_spawn_count][1] = ny;
+        ++(*enemy_spawn_count);
+    }
+}
+
 static void reset_to_new_game(GameState *gs) {
     const bool banked = bank_run_shards(gs);
+    memset(gs->items, 0, sizeof(gs->items));
+    clear_active_item_list(gs);
     memset(gs->mines, 0, sizeof(gs->mines));
     memset(gs->mine_fuse_ticks, 0, sizeof(gs->mine_fuse_ticks));
+    clear_active_mine_list(gs);
     gs->score = 0;
     gs->lives = DEFAULT_LIVES;
     gs->round = 1;
+    gs->round_clear_pending_ticks = 0;
     gs->run_score_mult_permille = RUN_SCORE_MULT_BASE_PERMILLE;
     gs->run_round_time_bonus_ticks = 0;
     gs->run_enemy_speed_penalty_fp = 0;
@@ -4570,6 +5266,7 @@ void game_init(GameState *gs, uint32_t seed) {
     gs->score = 0;
     gs->lives = DEFAULT_LIVES;
     gs->round = 1;
+    gs->round_clear_pending_ticks = 0;
     gs->run_score_mult_permille = RUN_SCORE_MULT_BASE_PERMILLE;
     gs->run_round_time_bonus_ticks = 0;
     gs->run_enemy_speed_penalty_fp = 0;
@@ -4578,6 +5275,7 @@ void game_init(GameState *gs, uint32_t seed) {
     gs->run_shards = 0;
     gs->meta_shards = 0;
     gs->meta_progress_points = 0;
+    gs->meta_unlock_tier = meta_unlock_tier_from_progress(gs->meta_progress_points);
     gs->perk_choice_count = 0;
     gs->perk_choice_selected = 0;
     gs->meta_choice_count = 0;
@@ -4614,12 +5312,22 @@ void game_start_round(GameState *gs, int round_index) {
     memset(gs->terrain, 0, sizeof(gs->terrain));
     memset(gs->blocks, 0, sizeof(gs->blocks));
     memset(gs->items, 0, sizeof(gs->items));
+    clear_active_item_list(gs);
     memset(gs->mines, 0, sizeof(gs->mines));
     memset(gs->mine_fuse_ticks, 0, sizeof(gs->mine_fuse_ticks));
+    clear_active_mine_list(gs);
+    memset(gs->dirty_static_rows, 0, sizeof(gs->dirty_static_rows));
     memset(gs->moving_blocks, 0, sizeof(gs->moving_blocks));
+    gs->active_moving_block_mask = 0;
     memset(gs->enemies, 0, sizeof(gs->enemies));
+    gs->alive_enemy_count = 0;
+    gs->alive_enemy_mask = 0;
     memset(gs->score_popups, 0, sizeof(gs->score_popups));
+    gs->active_score_popup_count = 0;
+    gs->active_score_popup_mask = 0;
     memset(gs->impact_fx, 0, sizeof(gs->impact_fx));
+    gs->active_impact_fx_count = 0;
+    gs->active_impact_fx_mask = 0;
 
     gs->round = (round_index < 1) ? 1 : round_index;
     enemy_spawn_ticks_base = clampi(
@@ -4635,6 +5343,7 @@ void game_start_round(GameState *gs, int round_index) {
     gs->kills_this_round = 0;
     gs->kills_since_item_spawn = 0;
     gs->bonus_item_timer_ticks = 0;
+    gs->round_clear_pending_ticks = 0;
     gs->special_alignment_flash_ticks = 0;
     gs->special_alignment_awarded = false;
     gs->timer_danger_active = false;
@@ -4649,6 +5358,7 @@ void game_start_round(GameState *gs, int round_index) {
     gs->mine_tap_ticks = 0;
     gs->stage_modifier_flash_ticks = (gs->stage_modifier == STAGE_MOD_NONE) ? 0 : STAGE_MODIFIER_FLASH_TICKS;
     gs->run_mine_stock = gs->run_mine_capacity;
+    gs->meta_unlock_tier = meta_unlock_tier_from_progress(gs->meta_progress_points);
 
     gs->player_spawn_x = 1;
     gs->player_spawn_y = 1;
@@ -4709,6 +5419,11 @@ void game_start_round(GameState *gs, int round_index) {
     }
 
     enforce_spawn_opening_protection(gs, enemy_spawns, enemy_spawn_count);
+    gs->enemy_count = clampi(gs->round_config.enemy_count, 1, GAME_MAX_ENEMIES);
+    ensure_enemy_spawn_capacity(gs, enemy_spawns, &enemy_spawn_count, gs->enemy_count);
+    if (enemy_spawn_count < gs->enemy_count) {
+        gs->enemy_count = enemy_spawn_count;
+    }
 
     for (int y = 1; y < GAME_GRID_HEIGHT - 1; ++y) {
         for (int x = 1; x < GAME_GRID_WIDTH - 1; ++x) {
@@ -4722,9 +5437,10 @@ void game_start_round(GameState *gs, int round_index) {
         enemy_spawn_ticks_base = min_int(enemy_spawn_ticks_base, 52);
     }
 
-    gs->enemy_count = clampi(gs->round_config.enemy_count, 1, GAME_MAX_ENEMIES);
+    gs->alive_enemy_count = gs->enemy_count;
+    gs->alive_enemy_mask = 0;
     for (int i = 0; i < gs->enemy_count; ++i) {
-        const int spawn_idx = i % enemy_spawn_count;
+        const int spawn_idx = i;
         Enemy *enemy = &gs->enemies[i];
         enemy->tile_x = enemy_spawns[spawn_idx][0];
         enemy->tile_y = enemy_spawns[spawn_idx][1];
@@ -4750,21 +5466,25 @@ void game_start_round(GameState *gs, int round_index) {
         enemy->spawn_ticks = enemy_spawn_ticks_base + (int)(rng_next(gs) % 35u);
         enemy->decision_cooldown_ticks = 0;
         enemy->alive = true;
+        gs->alive_enemy_mask |= slot_bit(i);
     }
 
     reset_player_runtime_state(gs, gs->player_spawn_x, gs->player_spawn_y);
     gs->phase = GAME_PHASE_ROUND_INTRO;
     gs->phase_timer_ticks = ROUND_INTRO_TICKS;
     gs->start_title_pending = (gs->round == 1 && gs->score == 0u);
+    reset_fire_confirm_gate(gs);
     emit_event(gs, GAME_EVENT_ROUND_START);
     if (gs->stage_modifier != STAGE_MOD_NONE) {
         emit_event(gs, GAME_EVENT_STAGE_MODIFIER);
     }
+    mark_all_static_dirty(gs);
 }
 
 void game_step(GameState *gs, const InputState *in) {
     InputState input = {0};
     bool start_released = false;
+    bool fire_confirm_released = false;
     if (in != NULL) {
         input = *in;
     }
@@ -4774,6 +5494,13 @@ void game_step(GameState *gs, const InputState *in) {
         input.start = start_down && !gs->start_was_down;
         gs->start_was_down = start_down;
     }
+    if (input.fire_pressed) {
+        gs->fire_was_down = true;
+    }
+    if (input.fire_released) {
+        gs->fire_was_down = false;
+    }
+    fire_confirm_released = consume_fire_confirm_release(gs, &input);
     if (gs->stage_modifier_flash_ticks > 0) {
         --gs->stage_modifier_flash_ticks;
     }
@@ -4781,8 +5508,8 @@ void game_step(GameState *gs, const InputState *in) {
     switch (gs->phase) {
         case GAME_PHASE_ROUND_INTRO:
         {
-            const bool confirm_title = start_released || input.fire_released;
-            const bool confirm_intro = start_released || input.fire_released || input.newest_press != DIR_NONE;
+            const bool confirm_title = start_released || fire_confirm_released;
+            const bool confirm_intro = start_released || fire_confirm_released || input.newest_press != DIR_NONE;
             if (gs->start_title_pending) {
                 if (gs->phase_timer_ticks > 0) {
                     --gs->phase_timer_ticks;
@@ -4824,7 +5551,11 @@ void game_step(GameState *gs, const InputState *in) {
             break;
 
         case GAME_PHASE_ROUND_CLEAR:
-            if (input.start) {
+            if (input.start
+#if defined(ICEPANIC_AMIGA_SMALL_STACK)
+                || fire_confirm_released
+#endif
+            ) {
                 gs->phase_timer_ticks = 0;
             }
             if (gs->phase_timer_ticks > 0) {
@@ -4839,7 +5570,11 @@ void game_step(GameState *gs, const InputState *in) {
             break;
 
         case GAME_PHASE_GAME_OVER:
-            if (input.start) {
+            if (input.start
+#if defined(ICEPANIC_AMIGA_SMALL_STACK)
+                || fire_confirm_released
+#endif
+            ) {
                 gs->phase_timer_ticks = 0;
             }
             if (gs->phase_timer_ticks > 0) {
@@ -4854,89 +5589,65 @@ void game_step(GameState *gs, const InputState *in) {
             break;
 
         case GAME_PHASE_PERK_CHOICE:
-            update_perk_choice(gs, &input, start_released);
+            update_perk_choice(gs, &input, start_released, fire_confirm_released);
             update_score_popups(gs);
             update_impact_fx(gs);
             break;
 
         case GAME_PHASE_META_UPGRADE:
-            update_meta_upgrade_choice(gs, &input);
+            update_meta_upgrade_choice(gs, &input, fire_confirm_released);
             update_score_popups(gs);
             update_impact_fx(gs);
             break;
 
         case GAME_PHASE_PLAYING:
-            if (gs->round_time_ticks > 0) {
+        {
+            const bool clear_pending = round_clear_pending_active(gs);
+            if (!clear_pending && gs->round_time_ticks > 0) {
                 --gs->round_time_ticks;
             }
-            update_timer_danger_state(gs);
-            update_bonus_item_timer(gs);
-            if (gs->round_time_ticks <= 0) {
+            if (!clear_pending) {
+                update_timer_danger_state(gs);
+                update_bonus_item_timer(gs);
+            }
+            if (!clear_pending && gs->round_time_ticks <= 0) {
                 kill_player(gs);
                 update_score_popups(gs);
                 break;
             }
 
-            update_player_intent(gs, &input);
+            if (!clear_pending) {
+                update_player_intent(gs, &input);
+            }
             update_player_motion(gs);
             update_moving_blocks(gs);
-            update_mine_fuses(gs);
-            update_enemies(gs);
-            resolve_player_enemy_collision(gs);
-            resolve_item_collection(gs);
+            if (!clear_pending) {
+                update_mine_fuses(gs);
+                update_enemies(gs);
+                resolve_player_enemy_collision(gs);
+                resolve_item_collection(gs);
+            }
             check_round_clear(gs);
             update_score_popups(gs);
             update_impact_fx(gs);
             break;
+        }
     }
 }
 
 void game_get_render_state(const GameState *gs, RenderState *out) {
-    memset(out, 0, sizeof(*out));
-    memcpy(out->terrain, gs->terrain, sizeof(out->terrain));
-    memcpy(out->blocks, gs->blocks, sizeof(out->blocks));
-    memcpy(out->items, gs->items, sizeof(out->items));
-    memcpy(out->mines, gs->mines, sizeof(out->mines));
-    memcpy(out->mine_fuse_ticks, gs->mine_fuse_ticks, sizeof(out->mine_fuse_ticks));
-    memcpy(out->enemies, gs->enemies, sizeof(out->enemies));
-    memcpy(out->moving_blocks, gs->moving_blocks, sizeof(out->moving_blocks));
-    memcpy(out->score_popups, gs->score_popups, sizeof(out->score_popups));
-    memcpy(out->impact_fx, gs->impact_fx, sizeof(out->impact_fx));
-    out->enemy_count = gs->enemy_count;
-    out->player = gs->player;
-    out->score = gs->score;
-    out->lives = gs->lives;
-    out->round = gs->round;
-    out->round_time_ticks = gs->round_time_ticks;
-    out->round_clear_bonus_score = gs->round_clear_bonus_score;
-    out->bonus_item_timer_ticks = gs->bonus_item_timer_ticks;
-    out->special_alignment_flash_ticks = gs->special_alignment_flash_ticks;
-    out->special_alignment_awarded = gs->special_alignment_awarded;
-    out->timer_danger_active = gs->timer_danger_active;
-    out->timer_danger_pulse_ticks = gs->timer_danger_pulse_ticks;
-    out->run_shards = gs->run_shards;
-    out->meta_shards = gs->meta_shards;
-    out->meta_progress_points = gs->meta_progress_points;
+    *out = *gs;
     out->meta_unlock_tier = meta_unlock_tier_from_progress(gs->meta_progress_points);
-    out->run_score_mult_permille = gs->run_score_mult_permille;
-    out->run_round_time_bonus_ticks = gs->run_round_time_bonus_ticks;
-    out->run_enemy_speed_penalty_fp = gs->run_enemy_speed_penalty_fp;
-    out->run_mine_capacity = gs->run_mine_capacity;
-    out->run_mine_stock = gs->run_mine_stock;
-    memcpy(out->perk_levels, gs->perk_levels, sizeof(out->perk_levels));
-    memcpy(out->perk_offer_cooldowns, gs->perk_offer_cooldowns, sizeof(out->perk_offer_cooldowns));
-    memcpy(out->perk_choices, gs->perk_choices, sizeof(out->perk_choices));
-    out->perk_choice_count = gs->perk_choice_count;
-    out->perk_choice_selected = gs->perk_choice_selected;
-    memcpy(out->meta_choices, gs->meta_choices, sizeof(out->meta_choices));
-    memcpy(out->meta_choice_costs, gs->meta_choice_costs, sizeof(out->meta_choice_costs));
-    out->meta_choice_count = gs->meta_choice_count;
-    out->meta_choice_selected = gs->meta_choice_selected;
-    out->stage_modifier = gs->stage_modifier;
-    out->stage_modifier_flash_ticks = gs->stage_modifier_flash_ticks;
-    out->phase = gs->phase;
-    out->phase_timer_ticks = gs->phase_timer_ticks;
-    out->start_title_pending = gs->start_title_pending;
+}
+
+const uint32_t *game_dirty_static_rows(const GameState *gs) {
+    return gs ? gs->dirty_static_rows : 0;
+}
+
+void game_clear_dirty_static(GameState *gs) {
+    if (gs) {
+        memset(gs->dirty_static_rows, 0, sizeof(gs->dirty_static_rows));
+    }
 }
 
 uint32_t game_consume_events(GameState *gs) {
@@ -4955,6 +5666,7 @@ uint32_t game_get_meta_shards(const GameState *gs) {
 
 void game_set_meta_progress(GameState *gs, uint32_t progress_points) {
     gs->meta_progress_points = progress_points;
+    gs->meta_unlock_tier = meta_unlock_tier_from_progress(gs->meta_progress_points);
 }
 
 uint32_t game_get_meta_progress(const GameState *gs) {
@@ -4987,17 +5699,31 @@ uint32_t game_debug_hash(const GameState *gs) {
     h = hash_bytes(h, gs->terrain, sizeof(gs->terrain));
     h = hash_bytes(h, gs->blocks, sizeof(gs->blocks));
     h = hash_bytes(h, gs->items, sizeof(gs->items));
+    h = hash_bytes(h, gs->active_item_x, sizeof(gs->active_item_x));
+    h = hash_bytes(h, gs->active_item_y, sizeof(gs->active_item_y));
+    h = hash_u32(h, (uint32_t)gs->active_item_count);
     h = hash_bytes(h, gs->mines, sizeof(gs->mines));
     h = hash_bytes(h, gs->mine_fuse_ticks, sizeof(gs->mine_fuse_ticks));
+    h = hash_bytes(h, gs->active_mine_x, sizeof(gs->active_mine_x));
+    h = hash_bytes(h, gs->active_mine_y, sizeof(gs->active_mine_y));
+    h = hash_u32(h, (uint32_t)gs->active_mine_count);
     h = hash_bytes(h, &gs->player, sizeof(gs->player));
     h = hash_bytes(h, gs->enemies, sizeof(gs->enemies));
+    h = hash_u32(h, (uint32_t)gs->alive_enemy_count);
+    h = hash_u32(h, (uint32_t)gs->alive_enemy_mask);
     h = hash_bytes(h, gs->moving_blocks, sizeof(gs->moving_blocks));
+    h = hash_u32(h, (uint32_t)gs->active_moving_block_mask);
     h = hash_bytes(h, gs->score_popups, sizeof(gs->score_popups));
+    h = hash_u32(h, (uint32_t)gs->active_score_popup_count);
+    h = hash_u32(h, (uint32_t)gs->active_score_popup_mask);
     h = hash_bytes(h, gs->impact_fx, sizeof(gs->impact_fx));
+    h = hash_u32(h, (uint32_t)gs->active_impact_fx_count);
+    h = hash_u32(h, (uint32_t)gs->active_impact_fx_mask);
     h = hash_u32(h, gs->score);
     h = hash_u32(h, (uint32_t)gs->lives);
     h = hash_u32(h, (uint32_t)gs->round);
     h = hash_u32(h, (uint32_t)gs->round_time_ticks);
+    h = hash_u32(h, (uint32_t)gs->round_clear_pending_ticks);
     h = hash_u32(h, (uint32_t)gs->round_clear_bonus_score);
     h = hash_u32(h, (uint32_t)gs->kills_this_round);
     h = hash_u32(h, (uint32_t)gs->kills_since_item_spawn);
@@ -5039,6 +5765,8 @@ uint32_t game_debug_hash(const GameState *gs) {
     h = hash_u32(h, gs->debug_force_procgen_template_pending ? 1u : 0u);
     h = hash_u32(h, (uint32_t)gs->debug_last_procgen_template_index);
     h = hash_u32(h, gs->start_was_down ? 1u : 0u);
+    h = hash_u32(h, gs->fire_was_down ? 1u : 0u);
+    h = hash_u32(h, gs->fire_confirm_armed ? 1u : 0u);
     h = hash_u32(h, gs->start_title_pending ? 1u : 0u);
     h = hash_u32(h, gs->rng_state);
     h = hash_u32(h, (uint32_t)gs->phase);
@@ -5049,8 +5777,9 @@ uint32_t game_debug_hash(const GameState *gs) {
 
 int game_debug_count_enemy_type(const GameState *gs, EnemyType type) {
     int count = 0;
-    for (int i = 0; i < gs->enemy_count; ++i) {
-        if (!gs->enemies[i].alive) {
+    uint16_t enemy_mask = live_enemy_mask_for_game(gs);
+    for (int i = 0; enemy_mask != 0u && i < gs->enemy_count; ++i, enemy_mask >>= 1) {
+        if ((enemy_mask & 1u) == 0u || !gs->enemies[i].alive) {
             continue;
         }
         if (gs->enemies[i].type == type) {

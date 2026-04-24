@@ -2853,11 +2853,7 @@ static void draw_active_run_buffs(
 
     draw_text_3x5_outlined(index_buffer, panel_x0 + 3, 4, buff_line, accent[HUD_ACCENT_UPGRADE_TEXT], accent[HUD_ACCENT_UPGRADE_PANEL_FILL]);
     draw_active_upgrade_badges(rs, index_buffer, low_intensity_viz, panel_x0 + 3, 11);
-    if (show_upgrade_details) {
-        draw_text_3x5_outlined(index_buffer, panel_x0 + 43, 12, "TAB HIDE", accent[HUD_ACCENT_UPGRADE_HINT], accent[HUD_ACCENT_UPGRADE_PANEL_FILL]);
-    } else {
-        draw_text_3x5_outlined(index_buffer, panel_x0 + 43, 12, "TAB DETAIL", accent[HUD_ACCENT_UPGRADE_HINT], accent[HUD_ACCENT_UPGRADE_PANEL_FILL]);
-    }
+    (void)show_upgrade_details;
 }
 
 static void draw_detailed_upgrade_panel(const RenderState *rs, uint8_t *index_buffer, bool low_intensity_viz) {
@@ -3342,6 +3338,7 @@ static void render_overlay(
     bool low_intensity_viz,
     bool show_upgrade_details) {
     const int ui_anim_tick = g_ui_anim_tick;
+    (void)show_upgrade_details;
 
     if (title_overlay != NULL &&
         title_overlay->loaded &&
@@ -3401,10 +3398,7 @@ static void render_overlay(
     }
 
     if (rs->phase == GAME_PHASE_PLAYING) {
-        draw_active_run_buffs(rs, index_buffer, low_intensity_viz, show_upgrade_details);
-        if (show_upgrade_details) {
-            draw_detailed_upgrade_panel(rs, index_buffer, low_intensity_viz);
-        }
+        draw_active_run_buffs(rs, index_buffer, low_intensity_viz, false);
     }
 
     if (rs->phase == GAME_PHASE_PERK_CHOICE && rs->perk_choice_count > 0) {
@@ -4409,10 +4403,10 @@ static bool update_high_score_entry(HighScoreEntryState *entry_state, const Inpu
             break;
     }
     if (!entry_state->confirm_armed) {
-        if (!in->start && !in->fire_pressed) {
+        if (!in->start && !in->fire_pressed && !in->fire_released) {
             entry_state->confirm_armed = true;
         }
-    } else if (in->start || in->fire_pressed) {
+    } else if (in->start || in->fire_released) {
         entry_state->active = false;
         return true;
     }

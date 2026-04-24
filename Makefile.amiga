@@ -1,0 +1,75 @@
+.NOTPARALLEL:
+
+VC ?= vc
+PYTHON ?= python
+XDFTOOL ?= xdftool
+TARGET_CONFIG ?= +kick13s
+ASSET_TARGET_CONFIG ?= +kick13
+OBJDIR ?= build/amiga
+OUT ?= $(OBJDIR)/icepanic_amiga
+ADF ?= $(OBJDIR)/icepanic_amiga.adf
+
+VBCC_ROOT ?= $(VBCC)
+NDK_INC ?= $(VBCC_ROOT)/NDK_1.3/INCLUDE-STRIP1.3/INCLUDE.H
+
+CFLAGS ?= -O3
+ASSET_CFLAGS ?= -c99 -O3
+AMIGA_PROFILE ?= 0
+AMIGA_SFX ?= 1
+AMIGA_PROFILE_DEFINE :=
+AMIGA_SFX_DEFINE :=
+ifeq ($(AMIGA_PROFILE),1)
+AMIGA_PROFILE_DEFINE := -DAMIGA_PROFILE_ON
+endif
+ifeq ($(AMIGA_SFX),0)
+AMIGA_SFX_DEFINE := -DAMIGA_NO_SFX
+endif
+AMIGA_DEFINES ?= -DICEPANIC_AMIGA_SMALL_STACK -DAMIGA_FAST_RENDER=1 -DAMIGA_USE_HW_SPRITES=0 -DAMIGA_USE_HW_SPARKLES=1 -DAMIGA_USE_GAMEPLAY_HW_SPARKLES=0 -DAMIGA_RENDER_DIVISOR=1 $(AMIGA_PROFILE_DEFINE) $(AMIGA_SFX_DEFINE)
+INCLUDES := -Isrc/core -Isrc/platform_amiga -I$(NDK_INC)
+
+OBJS := \
+	$(OBJDIR)/game.o \
+	$(OBJDIR)/amiga_assets.o
+ifneq ($(AMIGA_SFX),0)
+OBJS += $(OBJDIR)/amiga_sfx_assets.o
+endif
+OBJS += \
+	$(OBJDIR)/main.o
+
+.PHONY: all clean assets adf
+
+all: $(ADF)
+
+assets: src/platform_amiga/amiga_assets.c src/platform_amiga/amiga_assets.h src/platform_amiga/amiga_sfx_assets.c src/platform_amiga/amiga_sfx_assets.h
+
+adf: $(ADF)
+
+src/platform_amiga/amiga_assets.c src/platform_amiga/amiga_assets.h: assets/tileset.bin assets/title_overlay.bin tools/build_amiga_bob_assets.py
+	$(PYTHON) tools/build_amiga_bob_assets.py
+
+src/platform_amiga/amiga_sfx_assets.c src/platform_amiga/amiga_sfx_assets.h: tools/build_amiga_sfx_assets.py
+	$(PYTHON) tools/build_amiga_sfx_assets.py
+
+$(OBJDIR):
+	$(PYTHON) -c "import os; os.makedirs(r'$(OBJDIR)', exist_ok=True)"
+
+$(OBJDIR)/game.o: src/core/game.c src/core/game.h src/core/procgen_wfc_templates.h | $(OBJDIR)
+	$(VC) $(TARGET_CONFIG) $(CFLAGS) $(AMIGA_DEFINES) $(INCLUDES) -c $< -o $@
+
+$(OBJDIR)/amiga_assets.o: src/platform_amiga/amiga_assets.c src/platform_amiga/amiga_assets.h | $(OBJDIR)
+	$(VC) $(ASSET_TARGET_CONFIG) $(ASSET_CFLAGS) $(AMIGA_DEFINES) $(INCLUDES) -c $< -o $@
+
+$(OBJDIR)/amiga_sfx_assets.o: src/platform_amiga/amiga_sfx_assets.c src/platform_amiga/amiga_sfx_assets.h | $(OBJDIR)
+	$(VC) $(ASSET_TARGET_CONFIG) $(ASSET_CFLAGS) $(AMIGA_DEFINES) $(INCLUDES) -c $< -o $@
+
+$(OBJDIR)/main.o: src/platform_amiga/main.c src/platform_amiga/amiga_assets.h src/platform_amiga/amiga_sfx_assets.h src/core/game.h | $(OBJDIR)
+	$(VC) $(TARGET_CONFIG) $(CFLAGS) $(AMIGA_DEFINES) $(INCLUDES) -c $< -o $@
+
+$(OUT): $(OBJS)
+	$(VC) $(TARGET_CONFIG) $(OBJS) -o $@
+
+$(ADF): $(OUT) tools/build_amiga_adf.py | $(OBJDIR)
+	$(PYTHON) tools/build_amiga_adf.py --exe $(OUT) --output $(ADF) --xdftool $(XDFTOOL)
+
+clean:
+	$(PYTHON) -c "import shutil; shutil.rmtree(r'$(OBJDIR)', ignore_errors=True)"

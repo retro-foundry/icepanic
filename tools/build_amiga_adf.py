@@ -11,7 +11,7 @@ import tempfile
 from pathlib import Path
 
 
-DEFAULT_RELEASE_BASENAME = "icepanic-v0.9.0-beta.2-amiga-ecs-pal"
+DEFAULT_RELEASE_BASENAME = "icepanic-v0.9.0-beta.3-amiga-ecs-pal"
 
 
 def run_xdftool(xdftool: str, args: list[str]) -> None:

@@ -3840,12 +3840,6 @@ static void find_safe_respawn_tile(const GameState *gs, int *out_x, int *out_y) 
         }
     }
 
-    if (respawn_candidate_base_open(gs, sx, sy) && !tile_has_enemy(gs, sx, sy, -1)) {
-        *out_x = sx;
-        *out_y = sy;
-        return;
-    }
-
     for (int y = 1; y < GAME_GRID_HEIGHT - 1; ++y) {
         for (int x = 1; x < GAME_GRID_WIDTH - 1; ++x) {
             int score;
@@ -3861,8 +3855,14 @@ static void find_safe_respawn_tile(const GameState *gs, int *out_x, int *out_y) 
         }
     }
 
-    *out_x = best_x;
-    *out_y = best_y;
+    if (best_score > -30000) {
+        *out_x = best_x;
+        *out_y = best_y;
+        return;
+    }
+
+    *out_x = sx;
+    *out_y = sy;
 }
 
 static void kill_player(GameState *gs) {

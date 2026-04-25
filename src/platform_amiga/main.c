@@ -82,6 +82,14 @@
 
 #define SFX_MAX_STEPS 32
 #define SFX_VOICE_COUNT 4
+#define INTRO_MUSIC_WAVE_BYTES 32
+#define INTRO_MUSIC_WAVE_WORDS (INTRO_MUSIC_WAVE_BYTES / 2)
+#define INTRO_MUSIC_WAVE_COUNT 4
+#define INTRO_MUSIC_WAVE_CHIP_BYTES (INTRO_MUSIC_WAVE_BYTES * INTRO_MUSIC_WAVE_COUNT)
+#define INTRO_MUSIC_TICKS_PER_ROW 6
+#define INTRO_MUSIC_ROWS 32
+#define INTRO_MUSIC_HOLD 0
+#define INTRO_MUSIC_OFF 1
 
 #define PRA_FIR0_BIT (1 << 6)
 #define PRA_FIR1_BIT (1 << 7)
@@ -289,8 +297,12 @@ typedef struct AmigaSfxVoice {
 
 typedef struct AmigaSfxState {
     UBYTE *samples;
+    UBYTE *intro_waves;
     AmigaSfxVoice voice[SFX_VOICE_COUNT];
     UBYTE enabled;
+    UBYTE intro_music_active;
+    UBYTE intro_music_last_row;
+    UBYTE intro_music_hat_ticks;
 } AmigaSfxState;
 
 typedef struct AmigaApp {
@@ -1322,6 +1334,114 @@ static void write_hw_sparkle_sprite(const AmigaApp *app, int buf, int slot, int 
     dst[HW_SPRITE_WORDS - 1] = 0;
 }
 
+enum {
+    INTRO_WAVE_BASS = 0,
+    INTRO_WAVE_LEAD = 1,
+    INTRO_WAVE_PAD = 2,
+    INTRO_WAVE_NOISE = 3
+};
+
+enum {
+    INTRO_NOTE_C2 = 2,
+    INTRO_NOTE_D2,
+    INTRO_NOTE_EB2,
+    INTRO_NOTE_F2,
+    INTRO_NOTE_G2,
+    INTRO_NOTE_AB2,
+    INTRO_NOTE_BB2,
+    INTRO_NOTE_C3,
+    INTRO_NOTE_D3,
+    INTRO_NOTE_EB3,
+    INTRO_NOTE_F3,
+    INTRO_NOTE_G3,
+    INTRO_NOTE_AB3,
+    INTRO_NOTE_BB3,
+    INTRO_NOTE_C4,
+    INTRO_NOTE_D4,
+    INTRO_NOTE_EB4,
+    INTRO_NOTE_F4,
+    INTRO_NOTE_G4,
+    INTRO_NOTE_AB4,
+    INTRO_NOTE_BB4,
+    INTRO_NOTE_C5,
+    INTRO_NOTE_COUNT
+};
+
+static const UWORD kIntroMusicPeriods[INTRO_NOTE_COUNT] = {
+    0, 0,
+    1692, 1508, 1424, 1268, 1130, 1007, 950,
+    846, 754, 712, 634, 565, 503, 475,
+    423, 377, 356, 317, 282, 251, 237, 211
+};
+
+static const UBYTE kIntroWaveBass[INTRO_MUSIC_WAVE_BYTES] = {
+    8, 24, 42, 55, 63, 64, 64, 64,
+    64, 64, 63, 55, 42, 24, 8, 0,
+    248, 232, 214, 201, 193, 192, 192, 192,
+    192, 192, 193, 201, 214, 232, 248, 0
+};
+
+static const UBYTE kIntroWaveLead[INTRO_MUSIC_WAVE_BYTES] = {
+    0, 12, 24, 35, 45, 53, 59, 63,
+    64, 63, 59, 53, 45, 35, 24, 12,
+    0, 244, 232, 221, 211, 203, 197, 193,
+    192, 193, 197, 203, 211, 221, 232, 244
+};
+
+static const UBYTE kIntroWavePad[INTRO_MUSIC_WAVE_BYTES] = {
+    0, 8, 16, 24, 32, 40, 48, 56,
+    64, 56, 48, 40, 32, 24, 16, 8,
+    0, 248, 240, 232, 224, 216, 208, 200,
+    192, 200, 208, 216, 224, 232, 240, 248
+};
+
+static const UBYTE kIntroWaveNoise[INTRO_MUSIC_WAVE_BYTES] = {
+    0, 41, 214, 17, 90, 236, 196, 62,
+    12, 164, 51, 241, 113, 205, 28, 185,
+    72, 222, 8, 136, 64, 248, 180, 36,
+    99, 210, 19, 157, 47, 226, 118, 201
+};
+
+static const UBYTE kIntroBassPattern[INTRO_MUSIC_ROWS] = {
+    INTRO_NOTE_C2, INTRO_MUSIC_HOLD, INTRO_MUSIC_OFF, INTRO_NOTE_C2,
+    INTRO_MUSIC_HOLD, INTRO_MUSIC_OFF, INTRO_NOTE_G2, INTRO_MUSIC_HOLD,
+    INTRO_NOTE_BB2, INTRO_MUSIC_HOLD, INTRO_MUSIC_OFF, INTRO_NOTE_G2,
+    INTRO_MUSIC_HOLD, INTRO_MUSIC_OFF, INTRO_NOTE_EB2, INTRO_NOTE_F2,
+    INTRO_NOTE_C2, INTRO_MUSIC_HOLD, INTRO_MUSIC_OFF, INTRO_NOTE_C2,
+    INTRO_MUSIC_HOLD, INTRO_NOTE_EB2, INTRO_NOTE_G2, INTRO_MUSIC_HOLD,
+    INTRO_NOTE_AB2, INTRO_MUSIC_HOLD, INTRO_MUSIC_OFF, INTRO_NOTE_G2,
+    INTRO_MUSIC_HOLD, INTRO_NOTE_F2, INTRO_NOTE_EB2, INTRO_MUSIC_OFF
+};
+
+static const UBYTE kIntroLeadPattern[INTRO_MUSIC_ROWS] = {
+    INTRO_NOTE_C4, INTRO_NOTE_EB4, INTRO_NOTE_G4, INTRO_NOTE_BB4,
+    INTRO_NOTE_C5, INTRO_NOTE_BB4, INTRO_NOTE_G4, INTRO_NOTE_EB4,
+    INTRO_NOTE_AB4, INTRO_NOTE_G4, INTRO_NOTE_EB4, INTRO_NOTE_C4,
+    INTRO_NOTE_D4, INTRO_NOTE_F4, INTRO_NOTE_G4, INTRO_NOTE_BB4,
+    INTRO_NOTE_C5, INTRO_NOTE_BB4, INTRO_NOTE_G4, INTRO_NOTE_EB4,
+    INTRO_NOTE_C4, INTRO_NOTE_EB4, INTRO_NOTE_G4, INTRO_NOTE_C5,
+    INTRO_NOTE_BB4, INTRO_NOTE_G4, INTRO_NOTE_F4, INTRO_NOTE_D4,
+    INTRO_NOTE_EB4, INTRO_NOTE_G4, INTRO_NOTE_C5, INTRO_NOTE_BB4
+};
+
+static const UBYTE kIntroPadPattern[INTRO_MUSIC_ROWS] = {
+    INTRO_NOTE_C3, INTRO_MUSIC_HOLD, INTRO_MUSIC_HOLD, INTRO_MUSIC_HOLD,
+    INTRO_MUSIC_HOLD, INTRO_MUSIC_HOLD, INTRO_MUSIC_HOLD, INTRO_MUSIC_HOLD,
+    INTRO_NOTE_AB2, INTRO_MUSIC_HOLD, INTRO_MUSIC_HOLD, INTRO_MUSIC_HOLD,
+    INTRO_MUSIC_HOLD, INTRO_MUSIC_HOLD, INTRO_MUSIC_HOLD, INTRO_MUSIC_HOLD,
+    INTRO_NOTE_F2, INTRO_MUSIC_HOLD, INTRO_MUSIC_HOLD, INTRO_MUSIC_HOLD,
+    INTRO_MUSIC_HOLD, INTRO_MUSIC_HOLD, INTRO_MUSIC_HOLD, INTRO_MUSIC_HOLD,
+    INTRO_NOTE_G2, INTRO_MUSIC_HOLD, INTRO_MUSIC_HOLD, INTRO_MUSIC_HOLD,
+    INTRO_MUSIC_HOLD, INTRO_MUSIC_HOLD, INTRO_MUSIC_HOLD, INTRO_MUSIC_HOLD
+};
+
+static const UBYTE kIntroHatVolume[INTRO_MUSIC_ROWS] = {
+    12, 0, 0, 6, 10, 0, 0, 7,
+    12, 0, 0, 6, 10, 0, 7, 0,
+    12, 0, 0, 6, 10, 0, 0, 7,
+    12, 0, 6, 0, 10, 0, 7, 0
+};
+
 static UWORD sfx_dma_bit(UBYTE channel) {
     return (UWORD)(DMAF_AUD0 << channel);
 }
@@ -1359,6 +1479,102 @@ static void sfx_interrupt(AmigaSfxState *sfx) {
     }
     for (i = 0; i < SFX_VOICE_COUNT; ++i) {
         sfx_voice_clear(&sfx->voice[i]);
+    }
+}
+
+static void intro_music_copy_waves(AmigaSfxState *sfx) {
+    if (!sfx || !sfx->intro_waves) {
+        return;
+    }
+    CopyMem((APTR)kIntroWaveBass, (APTR)(sfx->intro_waves + (INTRO_WAVE_BASS * INTRO_MUSIC_WAVE_BYTES)), INTRO_MUSIC_WAVE_BYTES);
+    CopyMem((APTR)kIntroWaveLead, (APTR)(sfx->intro_waves + (INTRO_WAVE_LEAD * INTRO_MUSIC_WAVE_BYTES)), INTRO_MUSIC_WAVE_BYTES);
+    CopyMem((APTR)kIntroWavePad, (APTR)(sfx->intro_waves + (INTRO_WAVE_PAD * INTRO_MUSIC_WAVE_BYTES)), INTRO_MUSIC_WAVE_BYTES);
+    CopyMem((APTR)kIntroWaveNoise, (APTR)(sfx->intro_waves + (INTRO_WAVE_NOISE * INTRO_MUSIC_WAVE_BYTES)), INTRO_MUSIC_WAVE_BYTES);
+}
+
+static void intro_music_start_note(AmigaSfxState *sfx, UBYTE channel, UBYTE wave, UBYTE note, UBYTE volume) {
+    UBYTE *sample;
+    UWORD dma_bit;
+    if (!sfx || !sfx->enabled || !sfx->intro_waves || channel >= SFX_VOICE_COUNT) {
+        return;
+    }
+    if (note == INTRO_MUSIC_HOLD) {
+        return;
+    }
+    if (note == INTRO_MUSIC_OFF || note >= INTRO_NOTE_COUNT || volume == 0) {
+        sfx_disable_voice(channel);
+        return;
+    }
+    if (wave >= INTRO_MUSIC_WAVE_COUNT) {
+        wave = INTRO_WAVE_LEAD;
+    }
+
+    sample = sfx->intro_waves + ((ULONG)wave * INTRO_MUSIC_WAVE_BYTES);
+    dma_bit = sfx_dma_bit(channel);
+    CREGS->dmacon = dma_bit;
+    CREGS->aud[channel].ac_ptr = (UWORD *)sample;
+    CREGS->aud[channel].ac_len = INTRO_MUSIC_WAVE_WORDS;
+    CREGS->aud[channel].ac_per = kIntroMusicPeriods[note];
+    CREGS->aud[channel].ac_vol = volume;
+    CREGS->dmacon = DMAF_SETCLR | dma_bit;
+}
+
+static void intro_music_begin(AmigaSfxState *sfx) {
+    if (!sfx || !sfx->enabled || !sfx->intro_waves) {
+        return;
+    }
+    sfx_interrupt(sfx);
+    sfx->intro_music_active = 1;
+    sfx->intro_music_last_row = 0xffu;
+    sfx->intro_music_hat_ticks = 0;
+}
+
+static void intro_music_stop(AmigaSfxState *sfx) {
+    UBYTE i;
+    if (!sfx) {
+        return;
+    }
+    for (i = 0; i < SFX_VOICE_COUNT; ++i) {
+        sfx_disable_voice(i);
+    }
+    sfx->intro_music_active = 0;
+    sfx->intro_music_last_row = 0xffu;
+    sfx->intro_music_hat_ticks = 0;
+    if (sfx->enabled) {
+        for (i = 0; i < SFX_VOICE_COUNT; ++i) {
+            sfx_voice_clear(&sfx->voice[i]);
+        }
+    }
+}
+
+static void intro_music_update(AmigaSfxState *sfx, UWORD tick) {
+    UBYTE row;
+    UBYTE hat_volume;
+    if (!sfx || !sfx->intro_music_active) {
+        return;
+    }
+
+    if (sfx->intro_music_hat_ticks) {
+        --sfx->intro_music_hat_ticks;
+        if (!sfx->intro_music_hat_ticks) {
+            sfx_disable_voice(3);
+        }
+    }
+
+    row = (UBYTE)((tick / INTRO_MUSIC_TICKS_PER_ROW) & (INTRO_MUSIC_ROWS - 1));
+    if (row == sfx->intro_music_last_row) {
+        return;
+    }
+    sfx->intro_music_last_row = row;
+
+    intro_music_start_note(sfx, 0, INTRO_WAVE_BASS, kIntroBassPattern[row], 28);
+    intro_music_start_note(sfx, 1, INTRO_WAVE_LEAD, kIntroLeadPattern[row], 30);
+    intro_music_start_note(sfx, 2, INTRO_WAVE_PAD, kIntroPadPattern[row], 14);
+
+    hat_volume = kIntroHatVolume[row];
+    if (hat_volume) {
+        intro_music_start_note(sfx, 3, INTRO_WAVE_NOISE, INTRO_NOTE_C5, hat_volume);
+        sfx->intro_music_hat_ticks = 2;
     }
 }
 
@@ -1627,6 +1843,10 @@ static BOOL sfx_init(AmigaSfxState *sfx) {
     if (!sfx->samples) {
         return FALSE;
     }
+    sfx->intro_waves = (UBYTE *)AllocMem(INTRO_MUSIC_WAVE_CHIP_BYTES, ICE_MEMF_CHIP | ICE_MEMF_CLEAR);
+    if (sfx->intro_waves) {
+        intro_music_copy_waves(sfx);
+    }
     CopyMem((APTR)g_amiga_sfx_data, (APTR)sfx->samples, AMIGA_SFX_DATA_BYTES);
     for (i = 0; i < SFX_VOICE_COUNT; ++i) {
         sfx->voice[i].channel = i;
@@ -1649,6 +1869,9 @@ static void sfx_shutdown(AmigaSfxState *sfx) {
     }
     if (sfx->samples) {
         FreeMem(sfx->samples, AMIGA_SFX_DATA_BYTES);
+    }
+    if (sfx->intro_waves) {
+        FreeMem(sfx->intro_waves, INTRO_MUSIC_WAVE_CHIP_BYTES);
     }
     memset(sfx, 0, sizeof(*sfx));
 }
@@ -5289,9 +5512,9 @@ static void draw_cracktro_screen(UBYTE *screen) {
     draw_cracktro_wave_pixels(screen, 145, 18, 6);
     draw_cracktro_wave_pixels(screen, 158, 8, 12);
 
-    logo_x = (WORD)((SCREEN_W - text_width_scaled("BINARYFOUNDY", 4)) / 2);
-    draw_text_scaled_outlined(screen, logo_x + 2, 47, "BINARYFOUNDY", 2, 0, 4);
-    draw_text_scaled_outlined(screen, logo_x, 44, "BINARYFOUNDY", 8, 1, 4);
+    logo_x = (WORD)((SCREEN_W - text_width_scaled("RETROFOUNDRY", 4)) / 2);
+    draw_text_scaled_outlined(screen, logo_x + 2, 47, "RETROFOUNDRY", 2, 0, 4);
+    draw_text_scaled_outlined(screen, logo_x, 44, "RETROFOUNDRY", 8, 1, 4);
     draw_centered_text_outlined(screen, 0, SCREEN_W - 1, 83, "PRESENTS", 30, 1);
     draw_centered_text_scaled_outlined(screen, 0, SCREEN_W - 1, 101, "ICEPANIC", 23, 1, 3);
     draw_centered_text_outlined(screen, 0, SCREEN_W - 1, 128, ICEPANIC_VERSION_SHORT_TEXT " AMIGA ECS", 31, 1);
@@ -5328,9 +5551,11 @@ static void run_cracktro_intro(AmigaApp *app) {
     CREGS->dmacon = DISPLAY_DMA_BITS;
     g_sprite_dma_enabled = FALSE;
 
+    intro_music_begin(&app->sfx);
     fire_armed = joystick_fire_down() ? 0u : 1u;
     while (TRUE) {
         wait_frame_boundary_hw();
+        intro_music_update(&app->sfx, tick);
         patch_cracktro_copper_wave(ct, (WORD)tick);
         ++tick;
         fire = joystick_fire_down() ? 1u : 0u;
@@ -5341,6 +5566,7 @@ static void run_cracktro_intro(AmigaApp *app) {
         }
     }
 
+    intro_music_stop(&app->sfx);
     wait_frame_boundary_hw();
     patch_copper_bplptrs(&app->copper, app->screen[0]);
     CREGS->cop1lc = (ULONG)app->copper.list;

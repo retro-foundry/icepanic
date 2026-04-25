@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.9.0-beta.3
+
+Third Amiga ECS beta release candidate.
+
+- Added short Paula tracker-style intro music for the cracktro screen.
+- Fixed title branding to Retro Foundry in the Amiga intro.
+- Improved player respawn safety so respawns prefer genuinely open tiles.
+- Continued Amiga gameplay, high-score, enemy, menu, sound, and performance polish.
+
 ## v0.9.0-beta.2
 
 Second Amiga ECS beta release candidate.

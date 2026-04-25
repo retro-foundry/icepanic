@@ -1,4 +1,5 @@
 #include "game.h"
+#include "version.h"
 
 #include <SDL.h>
 
@@ -1214,7 +1215,7 @@ static SpriteId perk_sprite_for_type(PerkType perk) {
         case PERK_ENEMY_SLOW:
             return SPR_ITEM_FISH;
         case PERK_MINES:
-            return SPR_EFFECT_SPARK;
+            return SPR_MINE_1;
         default:
             return SPR_ITEM_MYSTERY;
     }
@@ -1248,7 +1249,7 @@ static const char *perk_label_for_type(PerkType perk) {
         case PERK_ENEMY_SLOW:
             return "SLOW";
         case PERK_MINES:
-            return "MINES";
+            return "BOMBS";
         default:
             return "MYST";
     }
@@ -1265,7 +1266,7 @@ static const char *perk_effect_for_type(PerkType perk) {
         case PERK_ENEMY_SLOW:
             return "SLOW BONUS TAPERS";
         case PERK_MINES:
-            return "SPACE/FIRE DROP MINE";
+            return "SPACE/FIRE DROP BOMB";
         default:
             return "NO EFFECT";
     }
@@ -2589,9 +2590,9 @@ static void sfx_queue_audition_demo(SfxState *sfx) {
     sfx_queue_silence(sfx, 24);
     sfx_queue_slot_chime(sfx);                         /* item collect */
     sfx_queue_silence(sfx, 36);
-    sfx_queue_tone_sweep(sfx, 520, 720, 32, 9800, 30);/* mine placed */
+    sfx_queue_tone_sweep(sfx, 520, 720, 32, 9800, 30);/* bomb placed */
     sfx_queue_silence(sfx, 18);
-    sfx_queue_noise_burst(sfx, 56, 14400);             /* mine exploded */
+    sfx_queue_noise_burst(sfx, 56, 14400);             /* bomb exploded */
     sfx_queue_tone_sweep(sfx, 280, 150, 96, 15600, 58);
     sfx_queue_silence(sfx, 30);
     sfx_queue_level_up_fanfare(sfx);                  /* level-up fanfare */
@@ -2791,7 +2792,7 @@ static void draw_active_upgrade_badges(
         x += 10;
     }
     if (mine_capacity > 0) {
-        draw_upgrade_badge(index_buffer, x, y, 'M', 22, 30);
+        draw_upgrade_badge(index_buffer, x, y, 'B', 22, 30);
     }
 }
 
@@ -2827,7 +2828,7 @@ static void draw_active_run_buffs(
     snprintf(
         buff_line,
         sizeof(buff_line),
-        "UP L+%d T+%d S+%d E+%d M%d/%d",
+        "UP L+%d T+%d S+%d E+%d B%d/%d",
         life_perk_level,
         time_bonus_seconds,
         score_bonus_percent,
@@ -2924,7 +2925,7 @@ static void draw_detailed_upgrade_panel(const RenderState *rs, uint8_t *index_bu
         ++row;
     }
     if (mine_capacity > 0) {
-        snprintf(line, sizeof(line), "MINES %d/%d", mine_stock, mine_capacity);
+        snprintf(line, sizeof(line), "BOMBS %d/%d", mine_stock, mine_capacity);
         draw_text_3x5_outlined(index_buffer, panel_x0 + 3, panel_y0 + 10 + row * 6, line, 22, 1);
     }
 }
@@ -4655,7 +4656,7 @@ int main(int argc, char **argv) {
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
 
     SDL_Window *window = SDL_CreateWindow(
-        "Icepanic V1",
+        ICEPANIC_VERSION_DISPLAY " PC",
         SDL_WINDOWPOS_CENTERED,
         SDL_WINDOWPOS_CENTERED,
         GAME_LOGICAL_WIDTH * 3,

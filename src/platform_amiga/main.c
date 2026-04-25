@@ -1,4 +1,5 @@
 #include "game.h"
+#include "version.h"
 #include "amiga_assets.h"
 
 #include <exec/types.h>
@@ -79,6 +80,7 @@
 #define TITLE_MASK_CHIP_BYTES ((ULONG)AMIGA_TITLE_OVERLAY_MASK_BYTES)
 
 #define SFX_MAX_STEPS 32
+#define SFX_VOICE_COUNT 4
 
 #define PRA_FIR0_BIT (1 << 6)
 #define PRA_FIR1_BIT (1 << 7)
@@ -269,12 +271,13 @@ typedef struct AmigaSfxVoice {
     UBYTE head;
     UBYTE count;
     UBYTE active;
+    UBYTE started_this_tick;
     UWORD elapsed;
 } AmigaSfxVoice;
 
 typedef struct AmigaSfxState {
     UBYTE *samples;
-    AmigaSfxVoice voice[2];
+    AmigaSfxVoice voice[SFX_VOICE_COUNT];
     UBYTE enabled;
 } AmigaSfxState;
 
@@ -672,7 +675,7 @@ static const char *perk_label(PerkType perk) {
         case PERK_ENEMY_SLOW:
             return "SLOW";
         case PERK_MINES:
-            return "MINES";
+            return "BOMBS";
         default:
             return "MYST";
     }
@@ -689,7 +692,7 @@ static const char *perk_effect_label(PerkType perk) {
         case PERK_ENEMY_SLOW:
             return "SLOW BONUS TAPERS";
         case PERK_MINES:
-            return "FIRE DROP MINE";
+            return "FIRE DROP BOMB";
         default:
             return "NO EFFECT";
     }
@@ -1270,12 +1273,16 @@ static void sfx_voice_clear(AmigaSfxVoice *voice) {
 }
 
 static void sfx_interrupt(AmigaSfxState *sfx) {
+    UBYTE i;
     if (!sfx || !sfx->enabled) {
         return;
     }
-    sfx_voice_clear(&sfx->voice[0]);
-    sfx_voice_clear(&sfx->voice[1]);
+    for (i = 0; i < SFX_VOICE_COUNT; ++i) {
+        sfx_voice_clear(&sfx->voice[i]);
+    }
 }
+
+static void sfx_start_voice_step(AmigaSfxState *sfx, AmigaSfxVoice *voice);
 
 static BOOL sfx_voice_push(AmigaSfxVoice *voice, const AmigaSfxStep *step) {
     UBYTE tail;
@@ -1311,10 +1318,30 @@ static void sfx_queue_sample(AmigaSfxState *sfx, UBYTE sample_id, UBYTE channel,
     if (!sfx || !sfx->enabled || sample_id == AMIGA_SFX_SAMPLE_NONE || sample_id >= AMIGA_SFX_SAMPLE_COUNT) {
         return;
     }
-    if (channel > 1) {
+    if (channel >= SFX_VOICE_COUNT) {
         channel = 0;
     }
     (void)sfx_queue_sample_voice(&sfx->voice[channel], sample_id, volume);
+}
+
+static void sfx_play_sample_now(AmigaSfxState *sfx, UBYTE sample_id, UBYTE channel, UBYTE volume) {
+    AmigaSfxVoice *voice;
+    if (!sfx || !sfx->enabled || sample_id == AMIGA_SFX_SAMPLE_NONE || sample_id >= AMIGA_SFX_SAMPLE_COUNT) {
+        return;
+    }
+    if (channel >= SFX_VOICE_COUNT) {
+        channel = 0;
+    }
+    voice = &sfx->voice[channel];
+    sfx_voice_clear(voice);
+    if (sfx_queue_sample_voice(voice, sample_id, volume)) {
+        sfx_start_voice_step(sfx, voice);
+    }
+}
+
+static void sfx_play_effect_now(AmigaSfxState *sfx, UBYTE sample_id, UBYTE volume) {
+    sfx_play_sample_now(sfx, sample_id, 2, volume);
+    sfx_play_sample_now(sfx, sample_id, 3, volume);
 }
 
 static void sfx_queue_slot_chime(AmigaSfxState *sfx) {
@@ -1346,7 +1373,10 @@ static void sfx_queue_combo_jingle(AmigaSfxState *sfx) {
 }
 
 static void sfx_queue_block_push_swish(AmigaSfxState *sfx) {
-    sfx_queue_sample(sfx, AMIGA_SFX_SAMPLE_BLOCK_PUSH_SWISH, 1, 58);
+    sfx_play_sample_now(sfx, AMIGA_SFX_SAMPLE_BLOCK_PUSH_SWISH, 0, 64);
+    sfx_play_sample_now(sfx, AMIGA_SFX_SAMPLE_BLOCK_PUSH_SWISH, 1, 64);
+    sfx_play_sample_now(sfx, AMIGA_SFX_SAMPLE_BLOCK_PUSH_SWISH, 2, 64);
+    sfx_play_sample_now(sfx, AMIGA_SFX_SAMPLE_BLOCK_PUSH_SWISH, 3, 64);
 }
 
 static void sfx_queue_title_start_jingle(AmigaSfxState *sfx) {
@@ -1355,7 +1385,7 @@ static void sfx_queue_title_start_jingle(AmigaSfxState *sfx) {
 }
 
 static void sfx_queue_title_confirm_chirp(AmigaSfxState *sfx) {
-    sfx_queue_sample(sfx, AMIGA_SFX_SAMPLE_TITLE_CONFIRM_CHIRP, 1, 56);
+    sfx_play_effect_now(sfx, AMIGA_SFX_SAMPLE_TITLE_CONFIRM_CHIRP, 48);
 }
 
 static void sfx_queue_new_high_score_fanfare(AmigaSfxState *sfx) {
@@ -1395,9 +1425,6 @@ static void sfx_dispatch_events(AmigaSfxState *sfx, uint32_t event_flags) {
         sfx_queue_combo_jingle(sfx);
         event_flags &= (uint32_t)~GAME_EVENT_CRUSH;
     }
-    if ((event_flags & GAME_EVENT_CRUSH) != 0u) {
-        sfx_queue_sample(sfx, AMIGA_SFX_SAMPLE_CRUSH, 1, 64);
-    }
     if ((event_flags & GAME_EVENT_ITEM_COLLECT) != 0u) {
         sfx_queue_slot_chime(sfx);
     }
@@ -1407,19 +1434,20 @@ static void sfx_dispatch_events(AmigaSfxState *sfx, uint32_t event_flags) {
     if ((event_flags & GAME_EVENT_ROUND_START) != 0u) {
         sfx_queue_sample(sfx, AMIGA_SFX_SAMPLE_ROUND_START, 0, 58);
     }
+    if ((event_flags & GAME_EVENT_BLOCK_IMPACT) != 0u) {
+        sfx_play_effect_now(sfx, AMIGA_SFX_SAMPLE_BLOCK_IMPACT, 52);
+    }
+    if ((event_flags & GAME_EVENT_MINE_PLACED) != 0u) {
+        sfx_play_effect_now(sfx, AMIGA_SFX_SAMPLE_MINE_PLACED, 52);
+    }
     if ((event_flags & GAME_EVENT_BLOCK_PUSH) != 0u) {
         sfx_queue_block_push_swish(sfx);
     }
-    if ((event_flags & GAME_EVENT_MINE_PLACED) != 0u) {
-        sfx_queue_sample(sfx, AMIGA_SFX_SAMPLE_MINE_PLACED, 1, 58);
-        event_flags &= (uint32_t)~GAME_EVENT_BLOCK_IMPACT;
+    if ((event_flags & GAME_EVENT_CRUSH) != 0u) {
+        sfx_play_effect_now(sfx, AMIGA_SFX_SAMPLE_CRUSH, 56);
     }
     if ((event_flags & GAME_EVENT_MINE_EXPLODED) != 0u) {
-        sfx_queue_sample(sfx, AMIGA_SFX_SAMPLE_MINE_EXPLODED, 1, 64);
-        event_flags &= (uint32_t)~GAME_EVENT_BLOCK_IMPACT;
-    }
-    if ((event_flags & GAME_EVENT_BLOCK_IMPACT) != 0u) {
-        sfx_queue_sample(sfx, AMIGA_SFX_SAMPLE_BLOCK_IMPACT, 1, 58);
+        sfx_play_effect_now(sfx, AMIGA_SFX_SAMPLE_MINE_EXPLODED, 56);
     }
     if ((event_flags & GAME_EVENT_META_BANKED) != 0u) {
         sfx_queue_reward_jingle(sfx);
@@ -1451,6 +1479,7 @@ static void sfx_start_voice_step(AmigaSfxState *sfx, AmigaSfxVoice *voice) {
     --voice->count;
     voice->elapsed = 0;
     voice->active = 1;
+    voice->started_this_tick = 1;
     channel = voice->channel;
 
     if (voice->current.wave == AMIGA_SFX_WAVE_SILENCE || voice->current.volume == 0) {
@@ -1486,27 +1515,30 @@ static void sfx_update_voice(AmigaSfxState *sfx, AmigaSfxVoice *voice) {
     if (!voice->active) {
         return;
     }
+    if (voice->started_this_tick) {
+        voice->started_this_tick = 0;
+        return;
+    }
 
     ++voice->elapsed;
     if (voice->elapsed >= voice->current.ticks) {
         voice->active = 0;
-        if (voice->count == 0) {
-            sfx_disable_voice(voice->channel);
-        } else {
-            sfx_start_voice_step(sfx, voice);
-        }
+        sfx_disable_voice(voice->channel);
     }
 }
 
 static void sfx_update(AmigaSfxState *sfx) {
+    UBYTE i;
     if (!sfx || !sfx->enabled) {
         return;
     }
-    sfx_update_voice(sfx, &sfx->voice[0]);
-    sfx_update_voice(sfx, &sfx->voice[1]);
+    for (i = 0; i < SFX_VOICE_COUNT; ++i) {
+        sfx_update_voice(sfx, &sfx->voice[i]);
+    }
 }
 
 static BOOL sfx_init(AmigaSfxState *sfx) {
+    UBYTE i;
     memset(sfx, 0, sizeof(*sfx));
 #if !AMIGA_SFX
     return FALSE;
@@ -1516,21 +1548,25 @@ static BOOL sfx_init(AmigaSfxState *sfx) {
         return FALSE;
     }
     CopyMem((APTR)g_amiga_sfx_data, (APTR)sfx->samples, AMIGA_SFX_DATA_BYTES);
-    sfx->voice[0].channel = 0;
-    sfx->voice[1].channel = 1;
+    for (i = 0; i < SFX_VOICE_COUNT; ++i) {
+        sfx->voice[i].channel = i;
+    }
     sfx->enabled = 1;
-    sfx_disable_voice(0);
-    sfx_disable_voice(1);
+    for (i = 0; i < SFX_VOICE_COUNT; ++i) {
+        sfx_disable_voice(i);
+    }
     return TRUE;
 #endif
 }
 
 static void sfx_shutdown(AmigaSfxState *sfx) {
+    UBYTE i;
     if (!sfx) {
         return;
     }
-    sfx_disable_voice(0);
-    sfx_disable_voice(1);
+    for (i = 0; i < SFX_VOICE_COUNT; ++i) {
+        sfx_disable_voice(i);
+    }
     if (sfx->samples) {
         FreeMem(sfx->samples, AMIGA_SFX_DATA_BYTES);
     }
@@ -4445,6 +4481,7 @@ static bool draw_overlay(const AmigaApp *app, UBYTE *screen, const RenderState *
             ((((g_ui_anim_tick / 14) & 1u) == 0u) ? 29 : 30),
 #endif
             1);
+        draw_centered_text(screen, 0, SCREEN_W - 1, 96, ICEPANIC_VERSION_SHORT_TEXT " ECS", 30);
         draw_opening_high_scores(screen, &g_high_scores);
 
         draw_panel(screen, 70, 148, 249, 178, 14);

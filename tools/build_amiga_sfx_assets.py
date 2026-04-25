@@ -20,6 +20,7 @@ SAMPLE_RATE = 8000
 PAL_CLOCK = 3546895
 TICK_HZ = 50
 TICK_SAMPLES = SAMPLE_RATE // TICK_HZ
+GUARD_TAIL_TICKS = 2
 MAX_S16 = 32767
 MIN_S16 = -32768
 
@@ -117,6 +118,7 @@ class SampleBuilder:
         if not self.samples:
             self.samples.append(0)
 
+        self.samples.extend([0] * (TICK_SAMPLES * GUARD_TAIL_TICKS))
         while len(self.samples) % TICK_SAMPLES:
             self.samples.append(0)
         if len(self.samples) & 1:
@@ -210,8 +212,9 @@ def combo_jingle(b: SampleBuilder) -> None:
 
 
 def block_push_swish(b: SampleBuilder) -> None:
-    b.tone_sweep(1240, 820, 24, 6800, 24)
-    b.tone_sweep(820, 560, 20, 6200, 20)
+    b.noise_burst(18, 8200)
+    b.tone_sweep(980, 520, 54, 15000, 28)
+    b.tone_sweep(620, 320, 42, 12600, 34)
 
 
 def title_start_jingle(b: SampleBuilder) -> None:

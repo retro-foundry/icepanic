@@ -2,6 +2,13 @@
 
 `Icepanic` is an original Pengo-style single-screen arcade prototype built for deterministic gameplay and eventual Amiga-friendly porting.
 
+Current release version: `v0.9.0-beta.1`.
+
+Release artifacts use the pattern `icepanic-v<version>-<platform>`, for example:
+- `icepanic-v0.9.0-beta.1-amiga-ecs-pal.adf`
+- `icepanic-v0.9.0-beta.1-amiga-ecs-pal`
+- `icepanic-v0.9.0-beta.1-pc.zip`
+
 ## Constraints
 - Logical resolution: `320x200`
 - Grid: `20x12` tiles at `16x16`
@@ -320,9 +327,10 @@ Prerequisites:
 - Python is available for asset generation
 - `xdftool` from `amitools` is on `PATH` for ADF packaging (`python -m pip install amitools`)
 
-Generate the Amiga blitter BOB C assets and packed title overlay from the canonical indexed assets:
+Generate the Amiga blitter BOB C assets, packed title overlay, and Paula sample bank from the canonical assets/PC SFX routines:
 ```powershell
 python tools/build_amiga_bob_assets.py
+python tools/build_amiga_sfx_assets.py
 ```
 
 Validate the generated palette/BOB/mask data without writing files:
@@ -338,8 +346,8 @@ make -f Makefile.amiga
 The default Amiga build uses vbcc's 16-bit-int Kickstart 1.3 target (`+kick13s`) and is tuned for cycle-exact ECS timing: 50 Hz game logic, 50 Hz rendering, 5bpl blitter BOBs, sprite DMA off, and interleaved planar tile/BOB assets so each tile restore or shifted BOB draw is one blitter job.
 
 This writes:
-- `build/amiga/icepanic_amiga` - Amiga hunk executable for PAL ECS/Kickstart 1.3
-- `build/amiga/icepanic_amiga.adf` - bootable DOS0/OFS disk image for WinUAE or a real Amiga
+- `build/amiga/icepanic-v0.9.0-beta.1-amiga-ecs-pal` - Amiga hunk executable for PAL ECS/Kickstart 1.3
+- `build/amiga/icepanic-v0.9.0-beta.1-amiga-ecs-pal.adf` - bootable DOS0/OFS disk image for WinUAE or a real Amiga
 - `build/amiga/*.o` - intermediate vbcc objects
 
 In WinUAE, map your joystick or keyboard joystick to Amiga port 2. Port 1 is left for the mouse and is ignored by gameplay input.
@@ -347,13 +355,16 @@ In WinUAE, map your joystick or keyboard joystick to Amiga port 2. Port 1 is lef
 If `make` is not installed, run the equivalent PowerShell build directly:
 ```powershell
 $ndk = Join-Path $env:VBCC 'NDK_1.3\INCLUDE-STRIP1.3\INCLUDE.H'
-$defs = '-DICEPANIC_AMIGA_SMALL_STACK', '-DAMIGA_FAST_RENDER=1', '-DAMIGA_USE_HW_SPRITES=0', '-DAMIGA_RENDER_DIVISOR=1'
+$defs = '-DICEPANIC_AMIGA_SMALL_STACK', '-DAMIGA_FAST_RENDER=1', '-DAMIGA_USE_HW_SPRITES=0', '-DAMIGA_USE_HW_SPARKLES=1', '-DAMIGA_USE_GAMEPLAY_HW_SPARKLES=0', '-DAMIGA_RENDER_DIVISOR=1'
 New-Item -ItemType Directory -Force -Path build\amiga | Out-Null
-vc +kick13s -O1 $defs -Isrc/core -Isrc/platform_amiga "-I$ndk" -c src/core/game.c -o build/amiga/game.o
-vc +kick13 -c99 -O2 $defs -Isrc/core -Isrc/platform_amiga "-I$ndk" -c src/platform_amiga/amiga_assets.c -o build/amiga/amiga_assets.o
-vc +kick13s -O1 $defs -Isrc/core -Isrc/platform_amiga "-I$ndk" -c src/platform_amiga/main.c -o build/amiga/main.o
-vc +kick13s build/amiga/game.o build/amiga/amiga_assets.o build/amiga/main.o -o build/amiga/icepanic_amiga
-python tools/build_amiga_adf.py --exe build/amiga/icepanic_amiga --output build/amiga/icepanic_amiga.adf
+python tools/build_amiga_bob_assets.py
+python tools/build_amiga_sfx_assets.py
+vc +kick13s -O3 $defs -Isrc/core -Isrc/platform_amiga "-I$ndk" -c src/core/game.c -o build/amiga/game.o
+vc +kick13 -c99 -O3 $defs -Isrc/core -Isrc/platform_amiga "-I$ndk" -c src/platform_amiga/amiga_assets.c -o build/amiga/amiga_assets.o
+vc +kick13 -c99 -O3 $defs -Isrc/core -Isrc/platform_amiga "-I$ndk" -c src/platform_amiga/amiga_sfx_assets.c -o build/amiga/amiga_sfx_assets.o
+vc +kick13s -O3 $defs -Isrc/core -Isrc/platform_amiga "-I$ndk" -c src/platform_amiga/main.c -o build/amiga/main.o
+vc +kick13s build/amiga/game.o build/amiga/amiga_assets.o build/amiga/amiga_sfx_assets.o build/amiga/main.o -o build/amiga/icepanic-v0.9.0-beta.1-amiga-ecs-pal
+python tools/build_amiga_adf.py --exe build/amiga/icepanic-v0.9.0-beta.1-amiga-ecs-pal --output build/amiga/icepanic-v0.9.0-beta.1-amiga-ecs-pal.adf
 ```
 
 The ADF is bootable and runs `SYS:Icepanic` from `S/startup-sequence`.

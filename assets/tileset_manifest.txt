@@ -30,6 +30,6 @@
 27 -> SPR_ITEM_MYSTERY -> (3,3) -> Mystery bonus item.
 28 -> SPR_HUD_LIFE -> (4,3) -> Life icon sprite.
 29 -> SPR_EFFECT_SPARK -> (5,3) -> Spark impact effect.
-30 -> SPR_MINE_0 -> (6,3) -> Mine sprite (steady fuse frame).
-31 -> SPR_MINE_1 -> (7,3) -> Mine sprite (warning fuse frame).
-32 -> SPR_MINE_2 -> (0,4) -> Mine sprite (critical fuse frame).
+30 -> SPR_MINE_0 -> (6,3) -> Bomb sprite (steady fuse frame).
+31 -> SPR_MINE_1 -> (7,3) -> Bomb sprite (warning fuse frame).
+32 -> SPR_MINE_2 -> (0,4) -> Bomb sprite (critical fuse frame).

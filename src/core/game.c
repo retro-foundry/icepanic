@@ -4758,6 +4758,14 @@ static bool runtime_block_is_pushable(BlockType block) {
     return block == BLOCK_ICE || block == BLOCK_SPECIAL || block == BLOCK_CRACKED;
 }
 
+static int opening_safe_enemy_distance_for_round(int round) {
+    return (round <= 3) ? 8 : ((round <= 7) ? 7 : 6);
+}
+
+enum {
+    OPENING_HARD_ENEMY_DISTANCE = 6
+};
+
 static bool enemy_spawn_marker_contains(
     const int enemy_spawns[GAME_MAX_ENEMIES][2],
     int enemy_spawn_count,
@@ -4800,6 +4808,21 @@ static int count_runtime_walkable_neighbors(
         ++exits;
     }
     return exits;
+}
+
+static int nearest_enemy_spawn_distance(
+    const int enemy_spawns[GAME_MAX_ENEMIES][2],
+    int enemy_spawn_count,
+    int x,
+    int y) {
+    int nearest = GAME_GRID_WIDTH + GAME_GRID_HEIGHT;
+    for (int i = 0; i < enemy_spawn_count; ++i) {
+        const int d = abs(enemy_spawns[i][0] - x) + abs(enemy_spawns[i][1] - y);
+        if (d < nearest) {
+            nearest = d;
+        }
+    }
+    return nearest;
 }
 
 static bool runtime_tile_can_host_enemy_spawn(
@@ -4910,50 +4933,6 @@ static bool find_runtime_enemy_spawn_relocation(
     return true;
 }
 
-static void enforce_enemy_spawn_distance_from_player(
-    GameState *gs,
-    int enemy_spawns[GAME_MAX_ENEMIES][2],
-    int enemy_spawn_count) {
-    const int spawn_x = gs->player_spawn_x;
-    const int spawn_y = gs->player_spawn_y;
-    const int min_spawn_enemy_dist = (gs->round <= 3) ? 8 : ((gs->round <= 7) ? 7 : 6);
-    const int min_spawn_separation = 3;
-
-    for (int i = 0; i < enemy_spawn_count; ++i) {
-        int nx = 0;
-        int ny = 0;
-
-        if (runtime_tile_can_host_enemy_spawn(
-                gs,
-                enemy_spawns,
-                enemy_spawn_count,
-                i,
-                enemy_spawns[i][0],
-                enemy_spawns[i][1],
-                spawn_x,
-                spawn_y,
-                min_spawn_enemy_dist,
-                min_spawn_separation)) {
-            continue;
-        }
-
-        if (find_runtime_enemy_spawn_relocation(
-                gs,
-                enemy_spawns,
-                enemy_spawn_count,
-                i,
-                spawn_x,
-                spawn_y,
-                min_spawn_enemy_dist,
-                min_spawn_separation,
-                &nx,
-                &ny)) {
-            enemy_spawns[i][0] = nx;
-            enemy_spawns[i][1] = ny;
-        }
-    }
-}
-
 static void ensure_spawn_runtime_floor_exits(
     GameState *gs,
     const int enemy_spawns[GAME_MAX_ENEMIES][2],
@@ -5045,6 +5024,109 @@ static bool runtime_tile_open_for_spawn_setup(
         return false;
     }
     return true;
+}
+
+static bool find_runtime_player_spawn_relocation(
+    const GameState *gs,
+    const int enemy_spawns[GAME_MAX_ENEMIES][2],
+    int enemy_spawn_count,
+    int min_enemy_dist,
+    bool require_push_option,
+    int *out_x,
+    int *out_y) {
+    int best_score = -32767;
+    int best_x = -1;
+    int best_y = -1;
+    const int old_x = gs->player_spawn_x;
+    const int old_y = gs->player_spawn_y;
+
+    for (int y = 1; y < GAME_GRID_HEIGHT - 1; ++y) {
+        for (int x = 1; x < GAME_GRID_WIDTH - 1; ++x) {
+            int nearest = 0;
+            int exits = 0;
+            int score = 0;
+            bool has_push = false;
+
+            if (!runtime_tile_open_for_spawn_setup(gs, enemy_spawns, enemy_spawn_count, x, y)) {
+                continue;
+            }
+            nearest = nearest_enemy_spawn_distance(enemy_spawns, enemy_spawn_count, x, y);
+            if (nearest < min_enemy_dist) {
+                continue;
+            }
+            exits = count_runtime_walkable_neighbors(gs, enemy_spawns, enemy_spawn_count, x, y);
+            if (exits < 2) {
+                continue;
+            }
+            has_push = runtime_has_push_option_from_tile(gs, enemy_spawns, enemy_spawn_count, x, y);
+            if (require_push_option && !has_push) {
+                continue;
+            }
+
+            score = nearest * 32 + exits * 8 + (has_push ? 64 : 0) -
+                    (abs(x - old_x) + abs(y - old_y));
+            if (score > best_score) {
+                best_score = score;
+                best_x = x;
+                best_y = y;
+            }
+        }
+    }
+
+    if (best_x < 0 || best_y < 0) {
+        return false;
+    }
+    *out_x = best_x;
+    *out_y = best_y;
+    return true;
+}
+
+static void ensure_player_spawn_opening_position(
+    GameState *gs,
+    const int enemy_spawns[GAME_MAX_ENEMIES][2],
+    int enemy_spawn_count) {
+    const int safe_dist = opening_safe_enemy_distance_for_round(gs->round);
+    const int sx = gs->player_spawn_x;
+    const int sy = gs->player_spawn_y;
+
+    if (runtime_tile_open_for_spawn_setup(gs, enemy_spawns, enemy_spawn_count, sx, sy) &&
+        nearest_enemy_spawn_distance(enemy_spawns, enemy_spawn_count, sx, sy) >= safe_dist) {
+        return;
+    }
+
+    for (int min_dist = safe_dist; min_dist >= OPENING_HARD_ENEMY_DISTANCE; --min_dist) {
+        int nx = 0;
+        int ny = 0;
+        if (find_runtime_player_spawn_relocation(
+                gs,
+                enemy_spawns,
+                enemy_spawn_count,
+                min_dist,
+                true,
+                &nx,
+                &ny)) {
+            gs->player_spawn_x = nx;
+            gs->player_spawn_y = ny;
+            return;
+        }
+    }
+
+    for (int min_dist = safe_dist; min_dist >= OPENING_HARD_ENEMY_DISTANCE; --min_dist) {
+        int nx = 0;
+        int ny = 0;
+        if (find_runtime_player_spawn_relocation(
+                gs,
+                enemy_spawns,
+                enemy_spawn_count,
+                min_dist,
+                false,
+                &nx,
+                &ny)) {
+            gs->player_spawn_x = nx;
+            gs->player_spawn_y = ny;
+            return;
+        }
+    }
 }
 
 static bool try_place_runtime_push_block_near_tile(
@@ -5159,16 +5241,14 @@ static void ensure_spawn_has_nearby_push_option(
     }
 }
 
-static void enforce_spawn_opening_protection(
+static int enforce_spawn_opening_protection(
     GameState *gs,
     int enemy_spawns[GAME_MAX_ENEMIES][2],
     int enemy_spawn_count) {
-    if (enemy_spawn_count <= 0) {
-        return;
-    }
-    enforce_enemy_spawn_distance_from_player(gs, enemy_spawns, enemy_spawn_count);
+    ensure_player_spawn_opening_position(gs, enemy_spawns, enemy_spawn_count);
     ensure_spawn_runtime_floor_exits(gs, enemy_spawns, enemy_spawn_count, 2);
     ensure_spawn_has_nearby_push_option(gs, enemy_spawns, enemy_spawn_count);
+    return enemy_spawn_count;
 }
 
 static void ensure_enemy_spawn_capacity(
@@ -5176,7 +5256,8 @@ static void ensure_enemy_spawn_capacity(
     int enemy_spawns[GAME_MAX_ENEMIES][2],
     int *enemy_spawn_count,
     int target_count) {
-    const int base_min_dist = (gs->round <= 3) ? 8 : ((gs->round <= 7) ? 7 : 6);
+    const int base_min_dist = opening_safe_enemy_distance_for_round(gs->round);
+    const int hard_min_dist = OPENING_HARD_ENEMY_DISTANCE;
     const int spawn_x = gs->player_spawn_x;
     const int spawn_y = gs->player_spawn_y;
 
@@ -5185,7 +5266,7 @@ static void ensure_enemy_spawn_capacity(
         int ny = 0;
         bool found = false;
 
-        for (int min_dist = base_min_dist; min_dist >= 2 && !found; --min_dist) {
+        for (int min_dist = base_min_dist; min_dist >= hard_min_dist && !found; --min_dist) {
             for (int min_sep = 3; min_sep >= 1 && !found; --min_sep) {
                 found = find_runtime_enemy_spawn_relocation(
                     gs,
@@ -5418,9 +5499,12 @@ void game_start_round(GameState *gs, int round_index) {
         apply_runtime_blocks_from_level_rows(gs, patched_rows);
     }
 
-    enforce_spawn_opening_protection(gs, enemy_spawns, enemy_spawn_count);
     gs->enemy_count = clampi(gs->round_config.enemy_count, 1, GAME_MAX_ENEMIES);
+    if (enemy_spawn_count > gs->enemy_count) {
+        enemy_spawn_count = gs->enemy_count;
+    }
     ensure_enemy_spawn_capacity(gs, enemy_spawns, &enemy_spawn_count, gs->enemy_count);
+    enemy_spawn_count = enforce_spawn_opening_protection(gs, enemy_spawns, enemy_spawn_count);
     if (enemy_spawn_count < gs->enemy_count) {
         gs->enemy_count = enemy_spawn_count;
     }

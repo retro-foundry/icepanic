@@ -134,9 +134,9 @@ SPRITE_NOTES = {
     "SPR_ITEM_MYSTERY": "Mystery bonus item.",
     "SPR_HUD_LIFE": "Life icon sprite.",
     "SPR_EFFECT_SPARK": "Spark impact effect.",
-    "SPR_MINE_0": "Mine sprite (steady fuse frame).",
-    "SPR_MINE_1": "Mine sprite (warning fuse frame).",
-    "SPR_MINE_2": "Mine sprite (critical fuse frame).",
+    "SPR_MINE_0": "Bomb sprite (steady fuse frame).",
+    "SPR_MINE_1": "Bomb sprite (warning fuse frame).",
+    "SPR_MINE_2": "Bomb sprite (critical fuse frame).",
 }
 
 

@@ -1,0 +1,19 @@
+#ifndef ICEPANIC_VERSION_H
+#define ICEPANIC_VERSION_H
+
+#define ICEPANIC_VERSION_MAJOR 0
+#define ICEPANIC_VERSION_MINOR 9
+#define ICEPANIC_VERSION_PATCH 0
+#define ICEPANIC_VERSION_PRERELEASE "beta.1"
+
+#define ICEPANIC_VERSION_STRING "0.9.0-beta.1"
+#define ICEPANIC_VERSION_TAG "v0.9.0-beta.1"
+#define ICEPANIC_VERSION_DISPLAY "Icepanic v0.9.0-beta.1"
+#define ICEPANIC_VERSION_SHORT_TEXT "V0.9.0-B1"
+
+#define ICEPANIC_PLATFORM_PC "pc"
+#define ICEPANIC_PLATFORM_AMIGA_ECS_PAL "amiga-ecs-pal"
+#define ICEPANIC_AMIGA_RELEASE_BASENAME "icepanic-v0.9.0-beta.1-amiga-ecs-pal"
+#define ICEPANIC_PC_RELEASE_BASENAME "icepanic-v0.9.0-beta.1-pc"
+
+#endif

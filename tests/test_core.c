@@ -194,6 +194,10 @@ static bool spawn_has_nearby_push_option_test(const GameState *gs) {
     return false;
 }
 
+static int opening_safe_enemy_distance_for_round_test(int round) {
+    return (round <= 3) ? 8 : ((round <= 7) ? 7 : 6);
+}
+
 static bool test_floor_walkable(const GameState *gs, int x, int y) {
     if (x <= 0 || y <= 0 || x >= GAME_GRID_WIDTH - 1 || y >= GAME_GRID_HEIGHT - 1) {
         return false;
@@ -2025,7 +2029,20 @@ static bool test_level_rows_validation_rules(void) {
 
 static bool test_procedural_round_generation_invariants(void) {
     const char *name = "procedural_round_generation_invariants";
-    const uint32_t seeds[] = {0x1234u, 0x445566u, 0x9911u, 0xabcdu};
+    const uint32_t seeds[] = {
+        0x1234u,
+        0x445566u,
+        0x9911u,
+        0xabcdu,
+        0x00c0ffeeu,
+        0xa53c9655u,
+        0x4a7c15d1u,
+        0x8128f3b5u,
+        0x13579bdfu,
+        0xf00dcafeu,
+        0x6d2b79f5u,
+        0xbad1deau
+    };
     static const int kDx[5] = {0, 0, 0, -1, 1};
     static const int kDy[5] = {0, -1, 1, 0, 0};
 
@@ -2054,6 +2071,7 @@ static bool test_procedural_round_generation_invariants(void) {
 
             px = gs.player_spawn_x;
             py = gs.player_spawn_y;
+            REQUIRE(name, gs.enemy_count == gs.round_config.enemy_count, "opening protection should not remove enemies");
             special_count = count_blocks_of_type(&gs, BLOCK_SPECIAL);
             pushable_count =
                 count_blocks_of_type(&gs, BLOCK_ICE) +
@@ -2109,7 +2127,10 @@ static bool test_procedural_round_generation_invariants(void) {
                     abs(enemy->tile_x - px) + abs(enemy->tile_y - py) > 1,
                     "enemy spawned adjacent to player");
             }
-            REQUIRE(name, nearest_enemy_dist >= 4, "enemy spawn should stay well away from protected opening");
+            REQUIRE(
+                name,
+                nearest_enemy_dist >= opening_safe_enemy_distance_for_round_test(round),
+                "enemy spawn should stay well away from protected opening");
             REQUIRE(name, spawn_has_nearby_push_option_test(&gs), "spawn should expose a nearby push option");
 
             for (int y = 1; y < GAME_GRID_HEIGHT - 1; ++y) {

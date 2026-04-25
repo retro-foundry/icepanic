@@ -11,6 +11,9 @@ import tempfile
 from pathlib import Path
 
 
+DEFAULT_RELEASE_BASENAME = "icepanic-v0.9.0-beta.1-amiga-ecs-pal"
+
+
 def run_xdftool(xdftool: str, args: list[str]) -> None:
     cmd = [xdftool, *args]
     try:
@@ -76,8 +79,16 @@ def build_adf(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--exe", default="build/amiga/icepanic_amiga", help="Amiga hunk executable to package.")
-    parser.add_argument("--output", default="build/amiga/icepanic_amiga.adf", help="Output ADF image path.")
+    parser.add_argument(
+        "--exe",
+        default=f"build/amiga/{DEFAULT_RELEASE_BASENAME}",
+        help="Amiga hunk executable to package.",
+    )
+    parser.add_argument(
+        "--output",
+        default=f"build/amiga/{DEFAULT_RELEASE_BASENAME}.adf",
+        help="Output ADF image path.",
+    )
     parser.add_argument("--volume", default="Icepanic", help="AmigaDOS volume name.")
     parser.add_argument("--xdftool", default="xdftool", help="xdftool executable from amitools.")
     parser.add_argument(

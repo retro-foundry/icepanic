@@ -851,6 +851,104 @@ static bool test_death_preserves_map_state(void) {
     return true;
 }
 
+static bool test_respawn_relocates_to_safe_tile(void) {
+    const char *name = "respawn_relocates_to_safe_tile";
+    GameState gs;
+    InputState none = {0};
+
+    init_empty_playing_arena(&gs);
+    gs.player_spawn_x = 2;
+    gs.player_spawn_y = 2;
+    gs.mines[2][2] = true;
+    gs.mine_fuse_ticks[2][2] = 40;
+
+    gs.enemy_count = 2;
+    gs.enemies[0].alive = true;
+    gs.enemies[0].state = ENEMY_ROAMING;
+    gs.enemies[0].type = ENEMY_TYPE_CHASER;
+    gs.enemies[0].tile_x = 3;
+    gs.enemies[0].tile_y = 2;
+    gs.enemies[0].pixel_fp_x = tile_to_fp_test(3);
+    gs.enemies[0].pixel_fp_y = tile_to_fp_test(2);
+    gs.enemies[0].speed_fp = FP_ONE_TEST;
+
+    gs.enemies[1].alive = true;
+    gs.enemies[1].state = ENEMY_ROAMING;
+    gs.enemies[1].type = ENEMY_TYPE_GHOST;
+    gs.enemies[1].tile_x = 5;
+    gs.enemies[1].tile_y = 2;
+    gs.enemies[1].pixel_fp_x = tile_to_fp_test(5);
+    gs.enemies[1].pixel_fp_y = tile_to_fp_test(2);
+    gs.enemies[1].speed_fp = FP_ONE_TEST;
+    gs.alive_enemy_count = 1;
+    gs.alive_enemy_mask = 3u;
+
+    gs.moving_blocks[0].active = true;
+    gs.active_moving_block_mask = 1u;
+    gs.moving_blocks[0].type = BLOCK_ICE;
+    gs.moving_blocks[0].tile_x = 2;
+    gs.moving_blocks[0].tile_y = 3;
+    gs.moving_blocks[0].pixel_fp_x = tile_to_fp_test(2);
+    gs.moving_blocks[0].pixel_fp_y = tile_to_fp_test(3) - (GAME_TILE_SIZE * FP_ONE_TEST) / 2;
+    gs.moving_blocks[0].direction = DIR_DOWN;
+    gs.moving_blocks[0].speed_fp = FP_ONE_TEST;
+
+    gs.phase = GAME_PHASE_PLAYER_DYING;
+    gs.phase_timer_ticks = 0;
+    gs.player.alive = false;
+    gs.lives = 3;
+
+    game_step(&gs, &none);
+
+    REQUIRE(name, gs.lives == 2, "death transition did not consume a life");
+    REQUIRE(name, gs.phase == GAME_PHASE_ROUND_INTRO, "respawn should return to round intro");
+    REQUIRE(name, gs.player.alive, "player did not respawn alive");
+    REQUIRE(name, gs.player.tile_x != 2 || gs.player.tile_y != 2, "player respawned on the unsafe original spawn");
+    REQUIRE(name, !gs.mines[gs.player.tile_y][gs.player.tile_x], "player respawned on a bomb");
+    REQUIRE(name, gs.blocks[gs.player.tile_y][gs.player.tile_x] == BLOCK_NONE, "player respawned inside a block");
+    for (int i = 0; i < gs.enemy_count; ++i) {
+        const int dist = abs(gs.enemies[i].tile_x - gs.player.tile_x) + abs(gs.enemies[i].tile_y - gs.player.tile_y);
+        REQUIRE(name, dist >= 4, "player respawned too close to an enemy");
+    }
+    return true;
+}
+
+static bool test_enemy_adjacent_target_tile_does_not_kill_before_touch(void) {
+    const char *name = "enemy_adjacent_target_tile_does_not_kill_before_touch";
+    GameState gs;
+    InputState right = {0};
+    InputState none = {0};
+
+    init_empty_playing_arena(&gs);
+    gs.enemy_count = 1;
+    gs.enemies[0].alive = true;
+    gs.enemies[0].state = ENEMY_SPAWNING;
+    gs.enemies[0].tile_x = 3;
+    gs.enemies[0].tile_y = 2;
+    gs.enemies[0].pixel_fp_x = tile_to_fp_test(3);
+    gs.enemies[0].pixel_fp_y = tile_to_fp_test(2);
+    gs.enemies[0].direction = DIR_NONE;
+    gs.enemies[0].speed_fp = 2 * FP_ONE_TEST;
+    gs.enemies[0].spawn_ticks = 200;
+
+    right.right = true;
+    right.newest_press = DIR_RIGHT;
+    game_step(&gs, &right);
+    REQUIRE(name, gs.phase == GAME_PHASE_PLAYING, "pressing toward an adjacent enemy should not kill before contact");
+    REQUIRE(name, gs.player.alive, "player died from intent instead of physical contact");
+
+    for (int i = 1; i < 4; ++i) {
+        game_step(&gs, &none);
+    }
+    REQUIRE(name, gs.phase == GAME_PHASE_PLAYING, "edge-adjacent hitboxes should not count as contact");
+    REQUIRE(name, gs.player.alive, "player died before visible hitboxes overlapped");
+
+    game_step(&gs, &none);
+    REQUIRE(name, gs.phase == GAME_PHASE_PLAYER_DYING, "player should die once enemy hitboxes overlap");
+    REQUIRE(name, !gs.player.alive, "player should be dead after actual enemy contact");
+    return true;
+}
+
 static bool test_round_clear_advances_round(void) {
     const char *name = "round_clear_advances_round";
     GameState gs;
@@ -1489,6 +1587,44 @@ static bool test_mine_auto_explodes_after_fuse_timeout(void) {
     return true;
 }
 
+static bool test_mine_blast_kills_player(void) {
+    const char *name = "mine_blast_kills_player";
+    GameState gs;
+    InputState none = {0};
+    uint32_t events;
+
+    init_empty_playing_arena(&gs);
+    gs.player.tile_x = 6;
+    gs.player.tile_y = 5;
+    gs.player.pixel_fp_x = tile_to_fp_test(6);
+    gs.player.pixel_fp_y = tile_to_fp_test(5);
+    gs.mines[5][5] = true;
+    gs.mine_fuse_ticks[5][5] = 1;
+    gs.active_mine_x[0] = 5;
+    gs.active_mine_y[0] = 5;
+    gs.active_mine_count = 1;
+    gs.enemy_count = 1;
+    gs.enemies[0].alive = true;
+    gs.enemies[0].state = ENEMY_SPAWNING;
+    gs.enemies[0].tile_x = 17;
+    gs.enemies[0].tile_y = 9;
+    gs.enemies[0].pixel_fp_x = tile_to_fp_test(17);
+    gs.enemies[0].pixel_fp_y = tile_to_fp_test(9);
+    gs.enemies[0].direction = DIR_NONE;
+    gs.enemies[0].speed_fp = 2 * FP_ONE_TEST;
+    gs.enemies[0].spawn_ticks = 200;
+
+    game_step(&gs, &none);
+    events = game_consume_events(&gs);
+
+    REQUIRE(name, !gs.mines[5][5], "mine should explode during fuse update");
+    REQUIRE(name, !gs.player.alive, "player should die when inside mine blast cross");
+    REQUIRE(name, gs.phase == GAME_PHASE_PLAYER_DYING, "mine blast should enter player death phase");
+    REQUIRE(name, (events & GAME_EVENT_PLAYER_DIED) != 0u, "mine blast death should emit player death event");
+    REQUIRE(name, (events & GAME_EVENT_MINE_EXPLODED) != 0u, "mine explosion event should still be emitted");
+    return true;
+}
+
 static bool test_mine_kill_scores_less_than_slide_crush(void) {
     const char *name = "mine_kill_scores_less_than_slide_crush";
     GameState mine;
@@ -1949,6 +2085,8 @@ static bool test_round_enemy_mix_includes_wanderers(void) {
     game_init(&gs, 0x55aa1234u);
 
     REQUIRE(name, game_debug_count_enemy_type(&gs, ENEMY_TYPE_WANDERER) == 0, "round 1 should not spawn wanderers");
+    REQUIRE(name, game_debug_count_enemy_type(&gs, ENEMY_TYPE_HUNTER) == 0, "round 1 should not spawn hunters");
+    REQUIRE(name, game_debug_count_enemy_type(&gs, ENEMY_TYPE_GHOST) == 0, "round 1 should not spawn ghosts");
     REQUIRE(
         name,
         game_debug_count_enemy_type(&gs, ENEMY_TYPE_CHASER) == gs.enemy_count,
@@ -1960,6 +2098,200 @@ static bool test_round_enemy_mix_includes_wanderers(void) {
     REQUIRE(name, wanderer_count > 0, "later rounds should include wanderers");
     REQUIRE(name, wanderer_count == gs.round_config.enemy_wanderer_count, "wanderer mix does not match round config");
     REQUIRE(name, wanderer_count + chaser_count == gs.enemy_count, "enemy type totals do not match enemy count");
+
+    game_start_round(&gs, 9);
+    {
+        const int hunter_count = game_debug_count_enemy_type(&gs, ENEMY_TYPE_HUNTER);
+        const int later_wanderer_count = game_debug_count_enemy_type(&gs, ENEMY_TYPE_WANDERER);
+        const int later_chaser_count = game_debug_count_enemy_type(&gs, ENEMY_TYPE_CHASER);
+        REQUIRE(name, hunter_count > 0, "harder rounds should introduce hunters");
+        REQUIRE(name, hunter_count == gs.round_config.enemy_hunter_count, "hunter mix does not match round config");
+        REQUIRE(name,
+                hunter_count + later_wanderer_count + later_chaser_count == gs.enemy_count,
+                "late enemy type totals do not match enemy count");
+    }
+
+    game_start_round(&gs, 13);
+    {
+        const int ghost_count = game_debug_count_enemy_type(&gs, ENEMY_TYPE_GHOST);
+        const int hunter_count = game_debug_count_enemy_type(&gs, ENEMY_TYPE_HUNTER);
+        const int later_wanderer_count = game_debug_count_enemy_type(&gs, ENEMY_TYPE_WANDERER);
+        const int later_chaser_count = game_debug_count_enemy_type(&gs, ENEMY_TYPE_CHASER);
+        REQUIRE(name, ghost_count > 0, "late rounds should introduce ghosts");
+        REQUIRE(name, ghost_count == gs.round_config.enemy_ghost_count, "ghost mix does not match round config");
+        REQUIRE(name,
+                ghost_count + hunter_count + later_wanderer_count + later_chaser_count == gs.enemy_count,
+                "late ghost enemy type totals do not match enemy count");
+    }
+
+    game_debug_force_next_stage_modifier(&gs, STAGE_MOD_NONE);
+    game_start_round(&gs, 25);
+    REQUIRE(name, game_debug_count_enemy_type(&gs, ENEMY_TYPE_GHOST) == 1, "only one ghost should spawn");
+    return true;
+}
+
+static bool test_wanderer_enemy_avoids_direct_chase_when_open(void) {
+    const char *name = "wanderer_enemy_avoids_direct_chase_when_open";
+    GameState chaser;
+    GameState wanderer;
+    InputState none = {0};
+
+    init_empty_playing_arena(&chaser);
+    chaser.rng_state = 0x13572468u;
+    chaser.round_config.aggression_percent = 100;
+    chaser.player.tile_x = 10;
+    chaser.player.tile_y = 6;
+    chaser.player.pixel_fp_x = tile_to_fp_test(10);
+    chaser.player.pixel_fp_y = tile_to_fp_test(6);
+    chaser.enemy_count = 1;
+    chaser.enemies[0].alive = true;
+    chaser.enemies[0].state = ENEMY_ROAMING;
+    chaser.enemies[0].type = ENEMY_TYPE_CHASER;
+    chaser.enemies[0].tile_x = 5;
+    chaser.enemies[0].tile_y = 6;
+    chaser.enemies[0].pixel_fp_x = tile_to_fp_test(5);
+    chaser.enemies[0].pixel_fp_y = tile_to_fp_test(6);
+    chaser.enemies[0].direction = DIR_NONE;
+    chaser.enemies[0].speed_fp = FP_ONE_TEST;
+
+    wanderer = chaser;
+    wanderer.rng_state = 0x13572468u;
+    wanderer.enemies[0].type = ENEMY_TYPE_WANDERER;
+
+    game_step(&chaser, &none);
+    game_step(&wanderer, &none);
+
+    REQUIRE(name, chaser.enemies[0].direction == DIR_RIGHT, "chaser should directly pursue player on full aggression");
+    REQUIRE(name, wanderer.enemies[0].direction != DIR_RIGHT, "wanderer should avoid direct chase when alternatives are open");
+    return true;
+}
+
+static bool test_hunter_enemy_reverses_to_chase(void) {
+    const char *name = "hunter_enemy_reverses_to_chase";
+    GameState gs;
+    InputState none = {0};
+
+    init_empty_playing_arena(&gs);
+    gs.rng_state = 0x24681357u;
+    gs.player.tile_x = 10;
+    gs.player.tile_y = 6;
+    gs.player.pixel_fp_x = tile_to_fp_test(10);
+    gs.player.pixel_fp_y = tile_to_fp_test(6);
+    gs.enemy_count = 1;
+    gs.enemies[0].alive = true;
+    gs.enemies[0].state = ENEMY_ROAMING;
+    gs.enemies[0].type = ENEMY_TYPE_HUNTER;
+    gs.enemies[0].tile_x = 5;
+    gs.enemies[0].tile_y = 6;
+    gs.enemies[0].pixel_fp_x = tile_to_fp_test(5);
+    gs.enemies[0].pixel_fp_y = tile_to_fp_test(6);
+    gs.enemies[0].direction = DIR_LEFT;
+    gs.enemies[0].speed_fp = FP_ONE_TEST;
+
+    game_step(&gs, &none);
+
+    REQUIRE(name, gs.enemies[0].direction == DIR_RIGHT, "hunter should reverse if that is the direct chase route");
+    return true;
+}
+
+static bool test_ghost_enemy_passes_through_blocks_to_chase(void) {
+    const char *name = "ghost_enemy_passes_through_blocks_to_chase";
+    GameState gs;
+    InputState none = {0};
+
+    init_empty_playing_arena(&gs);
+    gs.player.tile_x = 10;
+    gs.player.tile_y = 6;
+    gs.player.pixel_fp_x = tile_to_fp_test(10);
+    gs.player.pixel_fp_y = tile_to_fp_test(6);
+    gs.blocks[6][6] = BLOCK_ICE;
+    gs.enemy_count = 1;
+    gs.enemies[0].alive = true;
+    gs.enemies[0].state = ENEMY_ROAMING;
+    gs.enemies[0].type = ENEMY_TYPE_GHOST;
+    gs.enemies[0].tile_x = 5;
+    gs.enemies[0].tile_y = 6;
+    gs.enemies[0].pixel_fp_x = tile_to_fp_test(5);
+    gs.enemies[0].pixel_fp_y = tile_to_fp_test(6);
+    gs.enemies[0].direction = DIR_NONE;
+    gs.enemies[0].speed_fp = FP_ONE_TEST;
+
+    gs.enemy_count = 2;
+    gs.enemies[1].alive = true;
+    gs.enemies[1].state = ENEMY_SPAWNING;
+    gs.enemies[1].type = ENEMY_TYPE_CHASER;
+    gs.enemies[1].tile_x = 15;
+    gs.enemies[1].tile_y = 9;
+    gs.enemies[1].pixel_fp_x = tile_to_fp_test(15);
+    gs.enemies[1].pixel_fp_y = tile_to_fp_test(9);
+    gs.enemies[1].direction = DIR_NONE;
+    gs.enemies[1].speed_fp = FP_ONE_TEST;
+    gs.enemies[1].spawn_ticks = 100;
+    gs.alive_enemy_count = 1;
+    gs.alive_enemy_mask = 3u;
+
+    game_step(&gs, &none);
+    REQUIRE(name, gs.enemies[0].direction == DIR_RIGHT, "ghost should chase through a block tile");
+
+    for (int i = 0; i < 20 && gs.enemies[0].tile_x == 5; ++i) {
+        game_step(&gs, &none);
+    }
+
+    REQUIRE(name, gs.blocks[6][6] == BLOCK_ICE, "ghost movement should not consume the block it passes through");
+    REQUIRE(name, gs.enemies[0].tile_x == 6 && gs.enemies[0].tile_y == 6,
+            "ghost did not enter the blocked tile while chasing");
+    return true;
+}
+
+static bool test_ghost_enemy_is_unkillable_and_not_round_clear_target(void) {
+    const char *name = "ghost_enemy_is_unkillable_and_not_round_clear_target";
+    GameState gs;
+    InputState none = {0};
+
+    init_empty_playing_arena(&gs);
+    gs.player.tile_x = 2;
+    gs.player.tile_y = 2;
+    gs.player.pixel_fp_x = tile_to_fp_test(2);
+    gs.player.pixel_fp_y = tile_to_fp_test(2);
+    gs.enemy_count = 2;
+    gs.enemies[0].alive = true;
+    gs.enemies[0].state = ENEMY_ROAMING;
+    gs.enemies[0].type = ENEMY_TYPE_CHASER;
+    gs.enemies[0].tile_x = 4;
+    gs.enemies[0].tile_y = 6;
+    gs.enemies[0].pixel_fp_x = tile_to_fp_test(4);
+    gs.enemies[0].pixel_fp_y = tile_to_fp_test(6);
+    gs.enemies[0].spawn_ticks = 50;
+
+    gs.enemies[1].alive = true;
+    gs.enemies[1].state = ENEMY_SPAWNING;
+    gs.enemies[1].type = ENEMY_TYPE_GHOST;
+    gs.enemies[1].tile_x = 5;
+    gs.enemies[1].tile_y = 6;
+    gs.enemies[1].pixel_fp_x = tile_to_fp_test(5);
+    gs.enemies[1].pixel_fp_y = tile_to_fp_test(6);
+    gs.enemies[1].spawn_ticks = 50;
+    gs.alive_enemy_count = 1;
+    gs.alive_enemy_mask = 3u;
+
+    gs.moving_blocks[0].active = true;
+    gs.active_moving_block_mask = 1u;
+    gs.moving_blocks[0].type = BLOCK_ICE;
+    gs.moving_blocks[0].tile_x = 3;
+    gs.moving_blocks[0].tile_y = 6;
+    gs.moving_blocks[0].pixel_fp_x = tile_to_fp_test(3);
+    gs.moving_blocks[0].pixel_fp_y = tile_to_fp_test(6);
+    gs.moving_blocks[0].direction = DIR_RIGHT;
+    gs.moving_blocks[0].speed_fp = 0;
+    gs.moving_blocks[0].startup_ticks = 0;
+    gs.moving_blocks[0].intra_fp = 2 * GAME_TILE_SIZE * FP_ONE_TEST;
+
+    game_step(&gs, &none);
+
+    REQUIRE(name, !gs.enemies[0].alive, "sliding block should still crush normal enemies");
+    REQUIRE(name, gs.enemies[1].alive, "ghost should survive sliding block overlap");
+    REQUIRE(name, game_debug_count_enemy_type(&gs, ENEMY_TYPE_GHOST) == 1, "ghost should remain active after the hit");
+    REQUIRE(name, gs.round_clear_pending_ticks > 0, "round clear should start once only killable enemies are gone");
     return true;
 }
 
@@ -2910,6 +3242,8 @@ int main(void) {
     failed += test_stopped_block_dirties_static_when_settle_fx_expires() ? 0 : 1;
     failed += test_push_slide_crushes_interpolated_enemy_overlap() ? 0 : 1;
     failed += test_death_preserves_map_state() ? 0 : 1;
+    failed += test_respawn_relocates_to_safe_tile() ? 0 : 1;
+    failed += test_enemy_adjacent_target_tile_does_not_kill_before_touch() ? 0 : 1;
     failed += test_round_clear_advances_round() ? 0 : 1;
     failed += test_round_clear_does_not_require_points() ? 0 : 1;
     failed += test_round_clear_tracks_time_bonus_score() ? 0 : 1;
@@ -2927,6 +3261,7 @@ int main(void) {
     failed += test_fire_release_while_moving_queues_mine_drop() ? 0 : 1;
     failed += test_enemy_triggered_mine_explosion_kills_and_breaks_blocks() ? 0 : 1;
     failed += test_mine_auto_explodes_after_fuse_timeout() ? 0 : 1;
+    failed += test_mine_blast_kills_player() ? 0 : 1;
     failed += test_mine_kill_scores_less_than_slide_crush() ? 0 : 1;
     failed += test_stage_modifier_swarm_boosts_round_pressure() ? 0 : 1;
     failed += test_round_scaling_increases_pressure() ? 0 : 1;
@@ -2940,6 +3275,10 @@ int main(void) {
     failed += test_bonus_item_threshold_tightens_in_late_rounds() ? 0 : 1;
     failed += test_special_alignment_awards_bonus() ? 0 : 1;
     failed += test_round_enemy_mix_includes_wanderers() ? 0 : 1;
+    failed += test_wanderer_enemy_avoids_direct_chase_when_open() ? 0 : 1;
+    failed += test_hunter_enemy_reverses_to_chase() ? 0 : 1;
+    failed += test_ghost_enemy_passes_through_blocks_to_chase() ? 0 : 1;
+    failed += test_ghost_enemy_is_unkillable_and_not_round_clear_target() ? 0 : 1;
     failed += test_enemy_decision_cooldown_delays_first_step() ? 0 : 1;
     failed += test_level_rows_validation_rules() ? 0 : 1;
     failed += test_procedural_round_generation_invariants() ? 0 : 1;

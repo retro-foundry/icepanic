@@ -1,0 +1,31 @@
+        /\___/\   ___ ___ _____ ___  ___  ___ ___  _   _ _   _ ____  ___  _   _
+   ____/  _ _  \_| _ \ __|_   _| _ \/ _ \| __/ _ \| | | | \ | |  _ \| _ \| | | |
+  / __   / V \   \   / _|  | | |   / (_) | _| (_) | |_| |  \| | | | |   /| |_| |
+ /_/  \_/  ^  \___|_|_\___| |_| |_|_\\___/|_| \___/ \___/|_|\_|____/|_|_\ \__, |
+ \_\__/\/\___/\/\_________________________________________________________ |___/
+        \  \____/  /~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+         \________/
+
+                 ICEPANIC  -  AMIGA ECS PAL RELEASE
+                 VERSION   : 0.9.0-BETA.2
+                 TARGET    : AMIGA 500 ECS / 1MB CHIP / PAL
+                 DISPLAY   : 320X200 / 5BPL / 32 COLOURS
+                 HARDWARE  : COPPER / BLITTER BOBS / PAULA
+
+   ---------------------------------------------------------------------
+
+     Push ice blocks. Crush enemies. Grab bonuses. Survive the panic.
+
+     Just ECS, copper waves, blitter motion, Paula samples, and ice-cold
+     arcade timing.
+
+   ---------------------------------------------------------------------
+
+     LINKS
+
+       PATREON  : https://www.patreon.com/c/retrofoundry
+       RELEASES : https://retro-foundry.github.io/
+
+   ---------------------------------------------------------------------
+
+         "If it scrolls, waves, blits, or beeps, it belongs here."

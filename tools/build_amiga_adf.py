@@ -11,7 +11,7 @@ import tempfile
 from pathlib import Path
 
 
-DEFAULT_RELEASE_BASENAME = "icepanic-v0.9.0-beta.1-amiga-ecs-pal"
+DEFAULT_RELEASE_BASENAME = "icepanic-v0.9.0-beta.2-amiga-ecs-pal"
 
 
 def run_xdftool(xdftool: str, args: list[str]) -> None:
@@ -32,6 +32,7 @@ def build_adf(
     volume_name: str,
     xdftool: str,
     disk_info: Path | None,
+    nfo_path: Path | None,
 ) -> None:
     if not exe_path.is_file():
         raise RuntimeError(f"Amiga executable not found: {exe_path}")
@@ -74,6 +75,20 @@ def build_adf(
         if disk_info and disk_info.is_file():
             cmd.extend(["+", "write", str(disk_info), "disk.info"])
 
+        if nfo_path and nfo_path.is_file():
+            cmd.extend(
+                [
+                    "+",
+                    "write",
+                    str(nfo_path),
+                    "Icepanic.nfo",
+                    "+",
+                    "protect",
+                    "Icepanic.nfo",
+                    "rwed",
+                ]
+            )
+
         run_xdftool(xdftool_path, cmd)
 
 
@@ -96,6 +111,11 @@ def main() -> int:
         default="build/amiga/disk.info",
         help="Optional disk.info icon to include when present.",
     )
+    parser.add_argument(
+        "--nfo",
+        default="ICEPANIC.NFO",
+        help="Optional release NFO to include as Icepanic.nfo when present.",
+    )
     args = parser.parse_args()
 
     try:
@@ -105,6 +125,7 @@ def main() -> int:
             args.volume,
             args.xdftool,
             Path(args.disk_info) if args.disk_info else None,
+            Path(args.nfo) if args.nfo else None,
         )
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)

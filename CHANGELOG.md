@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.9.0-beta.2
+
+Second Amiga ECS beta release candidate.
+
+- Added Amiga cracktro-style intro with copper wave and fire-to-start hold.
+- Added release NFO packaging into the bootable ADF.
+- Included Retro Foundry Patreon and project URLs in release materials.
+- Continued Amiga gameplay, menu, audio, spawn-safety, and performance polish.
+
 ## v0.9.0-beta.1
 
 First user-facing beta release candidate for the Amiga ECS port.

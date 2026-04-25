@@ -49,7 +49,15 @@ typedef enum SpriteId {
     SPR_MINE_0 = 30,
     SPR_MINE_1 = 31,
     SPR_MINE_2 = 32,
-    SPR_COUNT = 33
+    SPR_ENEMY_C = 33,
+    SPR_ENEMY_C_ALT = 34,
+    SPR_ENEMY_C_DEATH_0 = 35,
+    SPR_ENEMY_C_DEATH_1 = 36,
+    SPR_ENEMY_D = 37,
+    SPR_ENEMY_D_ALT = 38,
+    SPR_ENEMY_D_DEATH_0 = 39,
+    SPR_ENEMY_D_DEATH_1 = 40,
+    SPR_COUNT = 41
 } SpriteId;
 
 typedef struct TileSet {
@@ -214,6 +222,7 @@ static const char *kHighScorePaths[] = {
     "../assets/high_scores.sav",
     "../../assets/high_scores.sav",
 };
+static char g_last_high_score_initials[4] = "AAA";
 
 static const uint8_t kDigit3x5[10][5] = {
     {0x7, 0x5, 0x5, 0x5, 0x7}, /* 0 */
@@ -529,6 +538,43 @@ static void build_fallback_tileset(TileSet *ts) {
     tile_rect(ts, SPR_ENEMY_B_ALT, 11, 11, 2, 2, 22);
     ts->tiles[SPR_ENEMY_B_ALT][6 * GAME_TILE_SIZE + 8] = 16;
 
+    tile_fill(ts, SPR_ENEMY_C, 0);
+    tile_rect(ts, SPR_ENEMY_C, 4, 5, 8, 7, 28);
+    tile_rect(ts, SPR_ENEMY_C, 5, 4, 6, 9, 29);
+    tile_rect(ts, SPR_ENEMY_C, 7, 2, 2, 3, 24);
+    tile_rect(ts, SPR_ENEMY_C, 2, 8, 3, 2, 24);
+    tile_rect(ts, SPR_ENEMY_C, 11, 8, 3, 2, 24);
+    tile_rect(ts, SPR_ENEMY_C, 6, 8, 2, 2, 31);
+    tile_rect(ts, SPR_ENEMY_C, 9, 8, 2, 2, 31);
+    ts->tiles[SPR_ENEMY_C][7 * GAME_TILE_SIZE + 8] = 12;
+    memcpy(ts->tiles[SPR_ENEMY_C_ALT], ts->tiles[SPR_ENEMY_C], sizeof(ts->tiles[SPR_ENEMY_C]));
+    tile_rect(ts, SPR_ENEMY_C_ALT, 7, 2, 2, 3, 0);
+    tile_rect(ts, SPR_ENEMY_C_ALT, 7, 1, 2, 3, 24);
+    tile_rect(ts, SPR_ENEMY_C_ALT, 2, 8, 3, 2, 0);
+    tile_rect(ts, SPR_ENEMY_C_ALT, 1, 8, 3, 2, 24);
+    tile_rect(ts, SPR_ENEMY_C_ALT, 11, 8, 3, 2, 0);
+    tile_rect(ts, SPR_ENEMY_C_ALT, 12, 8, 3, 2, 24);
+
+    tile_fill(ts, SPR_ENEMY_D, 0);
+    tile_rect(ts, SPR_ENEMY_D, 6, 3, 4, 2, 31);
+    tile_rect(ts, SPR_ENEMY_D, 5, 5, 6, 3, 21);
+    tile_rect(ts, SPR_ENEMY_D, 4, 8, 8, 3, 20);
+    tile_rect(ts, SPR_ENEMY_D, 5, 11, 2, 2, 21);
+    tile_rect(ts, SPR_ENEMY_D, 8, 11, 2, 3, 20);
+    tile_rect(ts, SPR_ENEMY_D, 11, 10, 1, 2, 21);
+    ts->tiles[SPR_ENEMY_D][6 * GAME_TILE_SIZE + 6] = 3;
+    ts->tiles[SPR_ENEMY_D][6 * GAME_TILE_SIZE + 9] = 3;
+    ts->tiles[SPR_ENEMY_D][4 * GAME_TILE_SIZE + 8] = 20;
+    ts->tiles[SPR_ENEMY_D][8 * GAME_TILE_SIZE + 5] = 31;
+    ts->tiles[SPR_ENEMY_D][8 * GAME_TILE_SIZE + 10] = 31;
+    memcpy(ts->tiles[SPR_ENEMY_D_ALT], ts->tiles[SPR_ENEMY_D], sizeof(ts->tiles[SPR_ENEMY_D]));
+    tile_rect(ts, SPR_ENEMY_D_ALT, 5, 11, 2, 2, 0);
+    tile_rect(ts, SPR_ENEMY_D_ALT, 8, 11, 2, 3, 0);
+    tile_rect(ts, SPR_ENEMY_D_ALT, 11, 10, 1, 2, 0);
+    tile_rect(ts, SPR_ENEMY_D_ALT, 4, 11, 2, 3, 20);
+    tile_rect(ts, SPR_ENEMY_D_ALT, 7, 11, 2, 2, 21);
+    tile_rect(ts, SPR_ENEMY_D_ALT, 10, 11, 2, 2, 20);
+
     tile_fill(ts, SPR_ENEMY_A_DEATH_0, 0);
     tile_rect(ts, SPR_ENEMY_A_DEATH_0, 3, 9, 10, 4, 18);
     tile_rect(ts, SPR_ENEMY_A_DEATH_0, 4, 8, 8, 2, 19);
@@ -558,6 +604,38 @@ static void build_fallback_tileset(TileSet *ts) {
     ts->tiles[SPR_ENEMY_B_DEATH_1][9 * GAME_TILE_SIZE + 10] = 15;
     ts->tiles[SPR_ENEMY_B_DEATH_1][10 * GAME_TILE_SIZE + 4] = 30;
     ts->tiles[SPR_ENEMY_B_DEATH_1][11 * GAME_TILE_SIZE + 11] = 30;
+
+    tile_fill(ts, SPR_ENEMY_C_DEATH_0, 0);
+    tile_rect(ts, SPR_ENEMY_C_DEATH_0, 3, 9, 10, 4, 28);
+    tile_rect(ts, SPR_ENEMY_C_DEATH_0, 4, 8, 8, 2, 29);
+    tile_line(ts, SPR_ENEMY_C_DEATH_0, 5, 8, 7, 10, 31);
+    tile_line(ts, SPR_ENEMY_C_DEATH_0, 7, 8, 5, 10, 31);
+    tile_line(ts, SPR_ENEMY_C_DEATH_0, 9, 8, 11, 10, 31);
+    tile_line(ts, SPR_ENEMY_C_DEATH_0, 11, 8, 9, 10, 31);
+    ts->tiles[SPR_ENEMY_C_DEATH_0][10 * GAME_TILE_SIZE + 6] = 12;
+    ts->tiles[SPR_ENEMY_C_DEATH_0][10 * GAME_TILE_SIZE + 9] = 12;
+    tile_fill(ts, SPR_ENEMY_C_DEATH_1, 0);
+    tile_rect(ts, SPR_ENEMY_C_DEATH_1, 5, 10, 6, 2, 28);
+    tile_rect(ts, SPR_ENEMY_C_DEATH_1, 4, 11, 8, 1, 29);
+    ts->tiles[SPR_ENEMY_C_DEATH_1][8 * GAME_TILE_SIZE + 5] = 24;
+    ts->tiles[SPR_ENEMY_C_DEATH_1][8 * GAME_TILE_SIZE + 10] = 24;
+    ts->tiles[SPR_ENEMY_C_DEATH_1][10 * GAME_TILE_SIZE + 4] = 31;
+    ts->tiles[SPR_ENEMY_C_DEATH_1][11 * GAME_TILE_SIZE + 11] = 31;
+
+    tile_fill(ts, SPR_ENEMY_D_DEATH_0, 0);
+    tile_rect(ts, SPR_ENEMY_D_DEATH_0, 4, 9, 8, 2, 21);
+    tile_rect(ts, SPR_ENEMY_D_DEATH_0, 5, 7, 6, 2, 20);
+    tile_line(ts, SPR_ENEMY_D_DEATH_0, 4, 6, 7, 10, 31);
+    tile_line(ts, SPR_ENEMY_D_DEATH_0, 11, 6, 8, 10, 31);
+    ts->tiles[SPR_ENEMY_D_DEATH_0][8 * GAME_TILE_SIZE + 6] = 3;
+    ts->tiles[SPR_ENEMY_D_DEATH_0][8 * GAME_TILE_SIZE + 9] = 3;
+    tile_fill(ts, SPR_ENEMY_D_DEATH_1, 0);
+    tile_rect(ts, SPR_ENEMY_D_DEATH_1, 5, 11, 6, 1, 21);
+    tile_rect(ts, SPR_ENEMY_D_DEATH_1, 6, 9, 4, 1, 20);
+    ts->tiles[SPR_ENEMY_D_DEATH_1][7 * GAME_TILE_SIZE + 4] = 31;
+    ts->tiles[SPR_ENEMY_D_DEATH_1][8 * GAME_TILE_SIZE + 11] = 31;
+    ts->tiles[SPR_ENEMY_D_DEATH_1][10 * GAME_TILE_SIZE + 7] = 3;
+    ts->tiles[SPR_ENEMY_D_DEATH_1][10 * GAME_TILE_SIZE + 9] = 3;
 
     tile_fill(ts, SPR_ITEM_FISH, 0);
     tile_rect(ts, SPR_ITEM_FISH, 3, 6, 9, 4, 13);
@@ -1198,10 +1276,23 @@ static SpriteId player_sprite_for_direction(Direction d, bool animate_alt) {
 static SpriteId enemy_sprite_for_state(const Enemy *enemy) {
     const int phase = (enemy->pixel_fp_x + enemy->pixel_fp_y) >> 9;
     const bool animate_alt = ((phase & 1) != 0);
+    if (enemy->type == ENEMY_TYPE_GHOST) {
+        return animate_alt ? SPR_ENEMY_D_ALT : SPR_ENEMY_D;
+    }
+    if (enemy->type == ENEMY_TYPE_HUNTER) {
+        return animate_alt ? SPR_ENEMY_C_ALT : SPR_ENEMY_C;
+    }
     if (enemy->type == ENEMY_TYPE_WANDERER) {
         return animate_alt ? SPR_ENEMY_B_ALT : SPR_ENEMY_B;
     }
     return animate_alt ? SPR_ENEMY_A_ALT : SPR_ENEMY_A;
+}
+
+static bool enemy_spawn_flash_visible(const Enemy *enemy) {
+    if (enemy->state != ENEMY_SPAWNING || enemy->spawn_ticks <= 0) {
+        return true;
+    }
+    return (((g_ui_anim_tick / 5) & 1) == 0);
 }
 
 static SpriteId perk_sprite_for_type(PerkType perk) {
@@ -2110,6 +2201,12 @@ static void draw_score_popups(const RenderState *rs, uint8_t *index_buffer, bool
 static SpriteId death_sprite_for_fx(const ImpactFx *fx) {
     const int age_ticks = fx->base_ttl_ticks - fx->ttl_ticks;
     const bool late_frame = age_ticks >= (fx->base_ttl_ticks / 2);
+    if (fx->style == IMPACT_FX_STYLE_ENEMY_DEATH_D) {
+        return late_frame ? SPR_ENEMY_D_DEATH_1 : SPR_ENEMY_D_DEATH_0;
+    }
+    if (fx->style == IMPACT_FX_STYLE_ENEMY_DEATH_C) {
+        return late_frame ? SPR_ENEMY_C_DEATH_1 : SPR_ENEMY_C_DEATH_0;
+    }
     if (fx->style == IMPACT_FX_STYLE_ENEMY_DEATH_B) {
         return late_frame ? SPR_ENEMY_B_DEATH_1 : SPR_ENEMY_B_DEATH_0;
     }
@@ -2133,7 +2230,9 @@ static void draw_impact_fx(const RenderState *rs, const TileSet *ts, uint8_t *in
         const int cy = fx->pixel_fp_y >> 8;
         const bool enemy_death_style =
             fx->style == IMPACT_FX_STYLE_ENEMY_DEATH_A ||
-            fx->style == IMPACT_FX_STYLE_ENEMY_DEATH_B;
+            fx->style == IMPACT_FX_STYLE_ENEMY_DEATH_B ||
+            fx->style == IMPACT_FX_STYLE_ENEMY_DEATH_C ||
+            fx->style == IMPACT_FX_STYLE_ENEMY_DEATH_D;
         if (enemy_death_style) {
             const int age_ticks = fx->base_ttl_ticks - fx->ttl_ticks;
             int px = cx - (GAME_TILE_SIZE / 2);
@@ -3187,7 +3286,7 @@ static void draw_high_score_entry_overlay(
     const int slot_spacing = 10;
     const int slots_total_w = slot_w * 3 + slot_spacing * 2;
     const int slots_x0 = panel_x0 + ((panel_x1 - panel_x0 + 1 - slots_total_w) / 2);
-    const int slots_y = 91;
+    const int slots_y = 98;
     char rank_line[24];
     char score_line[24];
     bool blink_on = true;
@@ -3203,7 +3302,6 @@ static void draw_high_score_entry_overlay(
     draw_centered_text_3x5_outlined(index_buffer, panel_x0, panel_x1, panel_y0 + 16, rank_line, 30, 1);
     snprintf(score_line, sizeof(score_line), "%u", (unsigned int)entry_state->pending_score);
     draw_centered_text_3x5_outlined(index_buffer, panel_x0, panel_x1, panel_y0 + 24, score_line, 8, 1);
-    draw_centered_text_3x5_outlined(index_buffer, panel_x0, panel_x1, panel_y0 + 34, "ENTER INITIALS", 30, 1);
 
     for (int i = 0; i < 3; ++i) {
         const bool selected = (i == entry_state->cursor);
@@ -3227,7 +3325,7 @@ static void draw_high_score_entry_overlay(
         draw_visual_arrow_glyph(index_buffer, center_x - 1, slots_y + slot_h + 2, DIR_DOWN, 30);
     }
     draw_centered_text_3x5_outlined(index_buffer, panel_x0, panel_x1, panel_y1 - 18, "ARROWS EDIT", 30, 1);
-    draw_centered_text_3x5_outlined(index_buffer, panel_x0, panel_x1, panel_y1 - 10, "START SAVE", 31, 1);
+    draw_centered_text_3x5_outlined(index_buffer, panel_x0, panel_x1, panel_y1 - 10, "FIRE NEXT/SAVE", 31, 1);
 }
 
 static void draw_title_star_sparkle(
@@ -3744,9 +3842,11 @@ static void render_scene(
         }
         const int px = enemy->pixel_fp_x >> 8;
         const int py = enemy->pixel_fp_y >> 8;
-        draw_actor_drop_shadow(index_buffer, px, py);
-        const SpriteId enemy_sprite = enemy_sprite_for_state(enemy);
-        draw_tile(ts, enemy_sprite, px, py, true, index_buffer);
+        if (enemy_spawn_flash_visible(enemy)) {
+            const SpriteId enemy_sprite = enemy_sprite_for_state(enemy);
+            draw_actor_drop_shadow(index_buffer, px, py);
+            draw_tile(ts, enemy_sprite, px, py, true, index_buffer);
+        }
         if (!low_intensity_viz && enemy->state == ENEMY_SPAWNING && enemy->spawn_ticks > 0) {
             draw_enemy_spawn_cue(index_buffer, px, py, enemy->spawn_ticks);
         } else if (!low_intensity_viz) {
@@ -4218,6 +4318,10 @@ static void sanitize_initials(char out_initials[4], const char *input) {
     out_initials[3] = '\0';
 }
 
+static void remember_high_score_initials(const char initials[4]) {
+    sanitize_initials(g_last_high_score_initials, initials);
+}
+
 static void high_score_table_set_defaults(HighScoreTable *table) {
     if (table == NULL) {
         return;
@@ -4361,8 +4465,7 @@ static char cycle_initial_letter(char letter, int delta) {
 static void begin_high_score_entry(
     HighScoreEntryState *entry_state,
     int insert_index,
-    uint32_t score,
-    const HighScoreTable *table) {
+    uint32_t score) {
     if (entry_state == NULL) {
         return;
     }
@@ -4373,13 +4476,7 @@ static void begin_high_score_entry(
     entry_state->cursor = 0;
     entry_state->blink_ticks = 0;
     entry_state->confirm_armed = false;
-    if (table != NULL &&
-        insert_index >= 0 &&
-        insert_index < (int)(sizeof(table->entries) / sizeof(table->entries[0]))) {
-        sanitize_initials(entry_state->initials, table->entries[insert_index].initials);
-    } else {
-        sanitize_initials(entry_state->initials, "AAA");
-    }
+    sanitize_initials(entry_state->initials, g_last_high_score_initials);
 }
 
 static bool update_high_score_entry(HighScoreEntryState *entry_state, const InputState *in) {
@@ -4408,6 +4505,12 @@ static bool update_high_score_entry(HighScoreEntryState *entry_state, const Inpu
             entry_state->confirm_armed = true;
         }
     } else if (in->start || in->fire_released) {
+        if (entry_state->cursor < 2) {
+            ++entry_state->cursor;
+            entry_state->blink_ticks = 0;
+            entry_state->confirm_armed = false;
+            return false;
+        }
         entry_state->active = false;
         return true;
     }
@@ -4779,6 +4882,7 @@ int main(int argc, char **argv) {
             if (high_score_entry.active) {
                 const InputState entry_input = consume_input(&input);
                 if (update_high_score_entry(&high_score_entry, &entry_input)) {
+                    remember_high_score_initials(high_score_entry.initials);
                     high_score_insert(
                         &high_scores,
                         high_score_entry.insert_index,
@@ -4925,8 +5029,7 @@ int main(int argc, char **argv) {
                         begin_high_score_entry(
                             &high_score_entry,
                             pending_post_game_over_insert_index,
-                            pending_post_game_over_score,
-                            &high_scores);
+                            pending_post_game_over_score);
                         /* Keep title-start jingle muted while name entry is active. */
                         title_jingle_queued = true;
                     }

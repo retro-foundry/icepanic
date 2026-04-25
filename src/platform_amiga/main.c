@@ -14,6 +14,7 @@
 #include <exec/tasks.h>
 #include <exec/libraries.h>
 #include <libraries/dos.h>
+#include <libraries/dosextens.h>
 #include <graphics/gfxbase.h>
 #include <intuition/intuitionbase.h>
 #include <hardware/custom.h>
@@ -134,6 +135,7 @@
 #define RENDER_FRAME_SPRITES 0x02u
 #define HIGH_SCORE_COUNT 5
 #define HIGH_SCORE_FILE "icepanic.hi"
+#define HIGH_SCORE_DISK_SAVE_ENABLED 0
 
 #define ICE_INLINE static inline
 
@@ -159,6 +161,8 @@ struct IntuitionBase *IntuitionBase = 0;
 static struct View *g_old_view = 0;
 static ULONG g_ui_anim_tick = 0;
 static BOOL g_sprite_dma_enabled = FALSE;
+static APTR g_old_dos_window_ptr = 0;
+static BOOL g_dos_window_ptr_saved = FALSE;
 
 typedef struct CopperState {
     UWORD *list;
@@ -168,6 +172,13 @@ typedef struct CopperState {
     UWORD *spr_hi[HW_SPRITE_COUNT];
     UWORD *spr_lo[HW_SPRITE_COUNT];
 } CopperState;
+
+typedef struct CracktroCopperState {
+    CopperState copper;
+    UWORD *color8[SCREEN_H];
+    UWORD *color18[SCREEN_H];
+    UWORD *color23[SCREEN_H];
+} CracktroCopperState;
 
 typedef struct StaticCell {
     UBYTE terrain;
@@ -248,6 +259,7 @@ typedef struct RendererState {
     UWORD sparkle_cell_count;
     UWORD sparkle_cursor;
     UBYTE sparkle_hw_count[2];
+    UBYTE hw_sprites_visible;
     DirtyRect prev_dynamic[2][DYNAMIC_DIRTY_SLOTS];
     WORD prev_dynamic_count[2];
 } RendererState;
@@ -302,6 +314,7 @@ typedef struct AmigaApp {
 
 static AmigaApp g_app;
 static GameState g_game;
+static CracktroCopperState g_cracktro;
 
 static const AmigaSpriteId kTerrainSprites[3] = {
     AMIGA_SPR_FLOOR,
@@ -361,6 +374,34 @@ static const HiScoreEntry kOpeningHiScores[HIGH_SCORE_COUNT] = {
 static const char kHighScoreMagic[8] = {'I', 'C', 'E', 'H', 'S', '1', 0, 0};
 static HighScoreTable g_high_scores;
 static HighScoreEntryState g_high_score_entry;
+static char g_last_high_score_initials[4] = "AAA";
+
+static void suppress_dos_requesters(void) {
+    struct Process *proc;
+    if (g_dos_window_ptr_saved) {
+        return;
+    }
+    proc = (struct Process *)FindTask(NULL);
+    if (!proc) {
+        return;
+    }
+    g_old_dos_window_ptr = proc->pr_WindowPtr;
+    proc->pr_WindowPtr = (APTR)-1;
+    g_dos_window_ptr_saved = TRUE;
+}
+
+static void restore_dos_requesters(void) {
+    struct Process *proc;
+    if (!g_dos_window_ptr_saved) {
+        return;
+    }
+    proc = (struct Process *)FindTask(NULL);
+    if (proc) {
+        proc->pr_WindowPtr = g_old_dos_window_ptr;
+    }
+    g_old_dos_window_ptr = 0;
+    g_dos_window_ptr_saved = FALSE;
+}
 
 static void sanitize_initials(char out_initials[4], const char *input) {
     int out_idx = 0;
@@ -382,6 +423,10 @@ static void sanitize_initials(char out_initials[4], const char *input) {
         out_initials[out_idx++] = 'A';
     }
     out_initials[3] = '\0';
+}
+
+static void remember_high_score_initials(const char initials[4]) {
+    sanitize_initials(g_last_high_score_initials, initials);
 }
 
 static void high_score_table_set_defaults(HighScoreTable *table) {
@@ -497,7 +542,7 @@ static char cycle_initial_letter(char letter, int delta) {
     return (char)('A' + value);
 }
 
-static void begin_high_score_entry(HighScoreEntryState *entry, WORD insert_index, uint32_t score, const HighScoreTable *table) {
+static void begin_high_score_entry(HighScoreEntryState *entry, WORD insert_index, uint32_t score) {
     if (!entry) {
         return;
     }
@@ -506,11 +551,7 @@ static void begin_high_score_entry(HighScoreEntryState *entry, WORD insert_index
     entry->insert_index = insert_index;
     entry->pending_score = score;
     entry->cursor = 0;
-    if (table && insert_index >= 0 && insert_index < HIGH_SCORE_COUNT) {
-        sanitize_initials(entry->initials, table->entries[insert_index].initials);
-    } else {
-        sanitize_initials(entry->initials, "AAA");
-    }
+    sanitize_initials(entry->initials, g_last_high_score_initials);
 }
 
 static BOOL update_high_score_entry(HighScoreEntryState *entry, const InputState *in) {
@@ -539,6 +580,12 @@ static BOOL update_high_score_entry(HighScoreEntryState *entry, const InputState
             entry->confirm_armed = 1;
         }
     } else if (in->fire_released || in->start) {
+        if (entry->cursor < 2) {
+            ++entry->cursor;
+            entry->blink_ticks = 0;
+            entry->confirm_armed = 0;
+            return FALSE;
+        }
         entry->active = 0;
         return TRUE;
     }
@@ -649,15 +696,34 @@ static AmigaSpriteId player_sprite_for_direction(Direction d, bool alt) {
 static AmigaSpriteId enemy_sprite_for_state(const Enemy *enemy) {
     const int phase = (enemy->pixel_fp_x + enemy->pixel_fp_y) >> 9;
     const bool alt = ((phase & 1) != 0);
+    if (enemy->type == ENEMY_TYPE_GHOST) {
+        return alt ? AMIGA_SPR_ENEMY_D_ALT : AMIGA_SPR_ENEMY_D;
+    }
+    if (enemy->type == ENEMY_TYPE_HUNTER) {
+        return alt ? AMIGA_SPR_ENEMY_C_ALT : AMIGA_SPR_ENEMY_C;
+    }
     if (enemy->type == ENEMY_TYPE_WANDERER) {
         return alt ? AMIGA_SPR_ENEMY_B_ALT : AMIGA_SPR_ENEMY_B;
     }
     return alt ? AMIGA_SPR_ENEMY_A_ALT : AMIGA_SPR_ENEMY_A;
 }
 
+static bool enemy_spawn_flash_visible(const Enemy *enemy) {
+    if (enemy->state != ENEMY_SPAWNING || enemy->spawn_ticks <= 0) {
+        return true;
+    }
+    return (((g_ui_anim_tick / 5UL) & 1UL) == 0UL);
+}
+
 static AmigaSpriteId death_sprite_for_fx(const ImpactFx *fx) {
     const int age = fx->base_ttl_ticks - fx->ttl_ticks;
     const bool late = (age >= (fx->base_ttl_ticks / 2));
+    if (fx->style == IMPACT_FX_STYLE_ENEMY_DEATH_D) {
+        return late ? AMIGA_SPR_ENEMY_D_DEATH_1 : AMIGA_SPR_ENEMY_D_DEATH_0;
+    }
+    if (fx->style == IMPACT_FX_STYLE_ENEMY_DEATH_C) {
+        return late ? AMIGA_SPR_ENEMY_C_DEATH_1 : AMIGA_SPR_ENEMY_C_DEATH_0;
+    }
     if (fx->style == IMPACT_FX_STYLE_ENEMY_DEATH_B) {
         return late ? AMIGA_SPR_ENEMY_B_DEATH_1 : AMIGA_SPR_ENEMY_B_DEATH_0;
     }
@@ -867,10 +933,15 @@ static BOOL hardware_sprites_active_for_state(const RenderState *rs) {
 static void set_sprite_dma_for_state(const RenderState *rs) {
 #if AMIGA_HW_SPRITES_ENABLED
     BOOL enable = hardware_sprites_active_for_state(rs);
+    if (!enable) {
+        CREGS->dmacon = DMAF_SPRITE;
+        g_sprite_dma_enabled = FALSE;
+        return;
+    }
     if (g_sprite_dma_enabled == enable) {
         return;
     }
-    CREGS->dmacon = enable ? (DMAF_SETCLR | DMAF_SPRITE) : DMAF_SPRITE;
+    CREGS->dmacon = DMAF_SETCLR | DMAF_SPRITE;
     g_sprite_dma_enabled = enable;
 #else
     (void)rs;
@@ -1180,11 +1251,7 @@ static void build_hw_sparkle_sprite_lines(AmigaApp *app) {
 }
 
 static void clear_hw_sprite_slot(UBYTE *bank, int slot) {
-    UWORD *dst = (UWORD *)(bank + ((ULONG)slot * HW_SPRITE_BYTES));
-    dst[0] = 0;
-    dst[1] = 0;
-    dst[HW_SPRITE_WORDS - 2] = 0;
-    dst[HW_SPRITE_WORDS - 1] = 0;
+    memset(bank + ((ULONG)slot * HW_SPRITE_BYTES), 0, HW_SPRITE_BYTES);
 }
 
 static void clear_hw_sprite_bank(UBYTE *bank) {
@@ -1192,6 +1259,19 @@ static void clear_hw_sprite_bank(UBYTE *bank) {
     for (i = 0; i < HW_SPRITE_COUNT; ++i) {
         clear_hw_sprite_slot(bank, i);
     }
+}
+
+static void clear_all_hw_sprites(AmigaApp *app, RendererState *rr) {
+    if (app->hw_sprite_bank[0]) {
+        clear_hw_sprite_bank(app->hw_sprite_bank[0]);
+    }
+    if (app->hw_sprite_bank[1]) {
+        clear_hw_sprite_bank(app->hw_sprite_bank[1]);
+    }
+    memset(rr->enemy_hw_sprite, 0, sizeof(rr->enemy_hw_sprite));
+    rr->sparkle_hw_count[0] = 0;
+    rr->sparkle_hw_count[1] = 0;
+    rr->hw_sprites_visible = 0;
 }
 
 static void write_hw_sprite_control(UWORD *dst, int x, int y, bool attached) {
@@ -2519,7 +2599,7 @@ static bool make_enemy_dynamic(const RendererState *rr, int buf, int index, cons
     int px;
     int py;
     AmigaSpriteId sprite;
-    if (!enemy->alive || rr->enemy_hw_sprite[buf][index]) {
+    if (!enemy->alive || rr->enemy_hw_sprite[buf][index] || !enemy_spawn_flash_visible(enemy)) {
         return false;
     }
     px = clamp_int(enemy->pixel_fp_x >> 8, 0, SCREEN_W - 32);
@@ -3073,11 +3153,16 @@ static int prepare_gameplay_hardware_sparkles(const AmigaApp *app, RendererState
 
 static BOOL prepare_enemy_hardware_sprites(AmigaApp *app, RendererState *rr, int buf, const RenderState *rs, bool disabled) {
 #if AMIGA_HW_SPRITES_ENABLED
-#if !AMIGA_USE_HW_SPRITES && !AMIGA_USE_GAMEPLAY_HW_SPARKLES
-    if (!title_hw_sparkles_active(rs) && rr->sparkle_hw_count[buf] == 0) {
+    if (!hardware_sprites_active_for_state(rs)) {
+        if (rr->hw_sprites_visible ||
+            rr->sparkle_hw_count[0] != 0 ||
+            rr->sparkle_hw_count[1] != 0) {
+            clear_all_hw_sprites(app, rr);
+            return TRUE;
+        }
         return FALSE;
     }
-#endif
+    rr->hw_sprites_visible = 1;
 #if AMIGA_USE_HW_SPRITES
     clear_hw_sprite_bank(app->hw_sprite_bank[buf]);
     memset(rr->enemy_hw_sprite[buf], 0, sizeof(rr->enemy_hw_sprite[buf]));
@@ -3091,6 +3176,9 @@ static BOOL prepare_enemy_hardware_sprites(AmigaApp *app, RendererState *rr, int
         int px;
         int py;
         if ((enemy_mask & 1u) == 0u || !enemy->alive) {
+            continue;
+        }
+        if (!enemy_spawn_flash_visible(enemy)) {
             continue;
         }
         sprite = enemy_sprite_for_state(enemy);
@@ -3204,7 +3292,9 @@ static void draw_impact_fx(const AmigaApp *app, RendererState *rr, int buf, UBYT
         cx = fx->pixel_fp_x >> 8;
         cy = fx->pixel_fp_y >> 8;
         death_style = fx->style == IMPACT_FX_STYLE_ENEMY_DEATH_A ||
-                      fx->style == IMPACT_FX_STYLE_ENEMY_DEATH_B;
+                      fx->style == IMPACT_FX_STYLE_ENEMY_DEATH_B ||
+                      fx->style == IMPACT_FX_STYLE_ENEMY_DEATH_C ||
+                      fx->style == IMPACT_FX_STYLE_ENEMY_DEATH_D;
         if (death_style) {
             int age_ticks = fx->base_ttl_ticks - fx->ttl_ticks;
             int px = clamp_int(cx - 8, 0, SCREEN_W - 32);
@@ -3789,14 +3879,12 @@ static void draw_high_score_entry_overlay(UBYTE *screen, const HighScoreEntrySta
     const int slot_spacing = 10;
     const int slots_total_w = slot_w * 3 + slot_spacing * 2;
     const int slots_x0 = panel_x0 + ((panel_x1 - panel_x0 + 1 - slots_total_w) / 2);
-    const int slots_y = 91;
+    const int slots_y = 98;
     int i;
-    bool blink_on;
 
     if (!entry || !entry->active) {
         return;
     }
-    blink_on = (((entry->blink_ticks / 6u) & 1u) == 0u) ? true : false;
 
     draw_panel(screen, panel_x0, panel_y0, panel_x1, panel_y1, 16);
     draw_centered_text_outlined(screen, panel_x0, panel_x1, panel_y0 + 8, "NEW HI SCORE", 31, 1);
@@ -3811,7 +3899,6 @@ static void draw_high_score_entry_overlay(UBYTE *screen, const HighScoreEntrySta
         1,
         8,
         1);
-    draw_centered_text_outlined(screen, panel_x0, panel_x1, panel_y0 + 43, "ENTER INITIALS", 30, 1);
 
     for (i = 0; i < 3; ++i) {
         bool selected = (i == entry->cursor);
@@ -3820,7 +3907,7 @@ static void draw_high_score_entry_overlay(UBYTE *screen, const HighScoreEntrySta
         draw_card_frame(screen, slot_x, slots_y, slot_w, slot_h, selected ? 29 : 17, selected);
         letter[0] = entry->initials[i];
         letter[1] = '\0';
-        if (!selected || blink_on) {
+        {
             int glyph_w = text_width_scaled(letter, 3);
             draw_text_scaled_outlined(
                 screen,
@@ -3840,7 +3927,7 @@ static void draw_high_score_entry_overlay(UBYTE *screen, const HighScoreEntrySta
         draw_visual_arrow_glyph(screen, center_x, slots_y + slot_h + 2, DIR_DOWN, 30);
     }
     draw_centered_text_outlined(screen, panel_x0, panel_x1, panel_y1 - 18, "ARROWS EDIT", 30, 1);
-    draw_centered_text_outlined(screen, panel_x0, panel_x1, panel_y1 - 10, "FIRE SAVE", 31, 1);
+    draw_centered_text_outlined(screen, panel_x0, panel_x1, panel_y1 - 10, "FIRE NEXT/SAVE", 31, 1);
 }
 
 static void draw_continue_chevrons(UBYTE *screen, int x, int y, UBYTE color_a, UBYTE color_b) {
@@ -5061,6 +5148,206 @@ static void patch_copper_spriteptrs(CopperState *cs, UBYTE *bank) {
     }
 }
 
+static UWORD cracktro_wave_color(WORD y, WORD tick, WORD channel) {
+    static const UWORD colors[16] = {
+        0x103, 0x214, 0x325, 0x436,
+        0x557, 0x669, 0x77B, 0x99D,
+        0xBBF, 0xEEF, 0xCDF, 0x8CF,
+        0x49C, 0x168, 0x025, 0x013
+    };
+    WORD phase = (WORD)(((y >> 2) + tick + (channel * 5)) & 15);
+    if (((y + (tick << 1) + (channel * 17)) & 32) != 0) {
+        phase = (WORD)(15 - phase);
+    }
+    return colors[phase];
+}
+
+static void patch_cracktro_copper_wave(CracktroCopperState *ct, WORD tick) {
+    WORD y;
+    for (y = 0; y < SCREEN_H; ++y) {
+        *(ct->color8[y]) = cracktro_wave_color(y, tick, 0);
+        *(ct->color18[y]) = cracktro_wave_color(y, (WORD)(tick + 4), 1);
+        *(ct->color23[y]) = cracktro_wave_color(y, (WORD)(tick + 8), 2);
+    }
+}
+
+static BOOL build_cracktro_copper_list(CracktroCopperState *ct) {
+    UWORD *p;
+    UWORD *cop;
+    WORD i;
+    WORD y;
+    ULONG words = 1800;
+
+    memset(ct, 0, sizeof(*ct));
+    cop = (UWORD *)AllocMem(words * sizeof(UWORD), ICE_MEMF_CHIP | ICE_MEMF_CLEAR);
+    if (!cop) {
+        return FALSE;
+    }
+    ct->copper.list = cop;
+    ct->copper.bytes = words * sizeof(UWORD);
+    p = cop;
+
+    *p++ = DIWSTRT; *p++ = 0x2C81;
+    *p++ = DIWSTOP; *p++ = 0xF4C1;
+    *p++ = DDFSTRT; *p++ = 0x0038;
+    *p++ = DDFSTOP; *p++ = 0x00D0;
+    *p++ = BPLCON0; *p++ = (UWORD)(0x0200 | (DEPTH << 12));
+    *p++ = BPLCON1; *p++ = 0x0000;
+    *p++ = BPLCON2; *p++ = 0x0000;
+    *p++ = BPL1MOD; *p++ = ROW_STRIDE_BYTES - ROW_BYTES;
+    *p++ = BPL2MOD; *p++ = ROW_STRIDE_BYTES - ROW_BYTES;
+
+    for (i = 0; i < DEPTH; ++i) {
+        *p++ = (UWORD)(BPL1PTH + (i * 4));
+        ct->copper.bpl_hi[i] = p;
+        *p++ = 0;
+        *p++ = (UWORD)(BPL1PTL + (i * 4));
+        ct->copper.bpl_lo[i] = p;
+        *p++ = 0;
+    }
+
+    for (i = 0; i < AMIGA_ASSET_PALETTE_COUNT; ++i) {
+        *p++ = (UWORD)COLOR_REG(i);
+        *p++ = g_amiga_palette[i];
+    }
+
+    for (y = 0; y < SCREEN_H; ++y) {
+        *p++ = (UWORD)(((0x2C + y) << 8) | 0x07);
+        *p++ = 0xFFFE;
+        *p++ = COLOR_REG(8);
+        ct->color8[y] = p;
+        *p++ = g_amiga_palette[8];
+        *p++ = COLOR_REG(18);
+        ct->color18[y] = p;
+        *p++ = g_amiga_palette[18];
+        *p++ = COLOR_REG(23);
+        ct->color23[y] = p;
+        *p++ = g_amiga_palette[23];
+    }
+
+    *p++ = (UWORD)((0xF4 << 8) | 0x07);
+    *p++ = 0xFFFE;
+    *p++ = BPLCON0;
+    *p++ = 0x0000;
+    *p++ = COLOR00;
+    *p++ = 0x0000;
+    *p++ = 0xFFFF;
+    *p++ = 0xFFFE;
+
+    return TRUE;
+}
+
+static void free_cracktro_copper(CracktroCopperState *ct) {
+    if (ct->copper.list) {
+        FreeMem(ct->copper.list, ct->copper.bytes);
+        ct->copper.list = 0;
+        ct->copper.bytes = 0;
+    }
+}
+
+static WORD cracktro_tri(WORD v, WORD amp) {
+    WORD phase = (WORD)(v & 31);
+    if (phase > 15) {
+        phase = (WORD)(31 - phase);
+    }
+    return (WORD)(((phase - 8) * amp) >> 3);
+}
+
+static void draw_cracktro_wave_pixels(UBYTE *screen, WORD y_base, UBYTE color, WORD phase) {
+    WORD x;
+    for (x = 0; x < SCREEN_W; x += 2) {
+        WORD y = (WORD)(y_base + cracktro_tri((WORD)((x >> 3) + phase), 7));
+        put_pixel(screen, x, y, color);
+        put_pixel(screen, x + 1, y, color);
+        if ((x & 6) == 0) {
+            put_pixel(screen, x, (WORD)(y + 1), (UBYTE)(color > 1 ? color - 1 : color));
+        }
+    }
+}
+
+static void draw_cracktro_screen(UBYTE *screen) {
+    WORD i;
+    WORD logo_x;
+
+    wait_blitter();
+    memset(screen, 0, SCREEN_BYTES);
+
+    for (i = 0; i < 96; ++i) {
+        WORD x = (WORD)(((i * 37) + 23) & 319);
+        WORD y = (WORD)(((i * 53) + 11) % 186);
+        UBYTE color = (UBYTE)((i & 3) == 0 ? 23 : ((i & 1) ? 3 : 2));
+        put_pixel(screen, x, y, color);
+        if ((i & 7) == 0 && x < SCREEN_W - 1) {
+            put_pixel(screen, (WORD)(x + 1), y, color);
+        }
+    }
+
+    for (i = 0; i < 7; ++i) {
+        draw_hline(screen, 0, SCREEN_W - 1, (WORD)(134 + (i * 4)), (UBYTE)((i & 1) ? 18 : 8));
+    }
+    draw_cracktro_wave_pixels(screen, 132, 23, 0);
+    draw_cracktro_wave_pixels(screen, 145, 18, 6);
+    draw_cracktro_wave_pixels(screen, 158, 8, 12);
+
+    logo_x = (WORD)((SCREEN_W - text_width_scaled("BINARYFOUNDY", 4)) / 2);
+    draw_text_scaled_outlined(screen, logo_x + 2, 47, "BINARYFOUNDY", 2, 0, 4);
+    draw_text_scaled_outlined(screen, logo_x, 44, "BINARYFOUNDY", 8, 1, 4);
+    draw_centered_text_outlined(screen, 0, SCREEN_W - 1, 83, "PRESENTS", 30, 1);
+    draw_centered_text_scaled_outlined(screen, 0, SCREEN_W - 1, 101, "ICEPANIC", 23, 1, 3);
+    draw_centered_text_outlined(screen, 0, SCREEN_W - 1, 128, ICEPANIC_VERSION_SHORT_TEXT " AMIGA ECS", 31, 1);
+    draw_centered_text(screen, 0, SCREEN_W - 1, 166, "HTTPS://WWW.PATREON.COM/C/RETROFOUNDRY", 18);
+    draw_centered_text(screen, 0, SCREEN_W - 1, 176, "HTTPS://RETRO-FOUNDRY.GITHUB.IO/", 18);
+    draw_centered_text(screen, 0, SCREEN_W - 1, 188, "REAL AMIGA 500 ECS BUILD", 30);
+}
+
+static void run_cracktro_intro(AmigaApp *app) {
+    UWORD tick = 0;
+    UBYTE fire_armed;
+    UBYTE fire;
+    CracktroCopperState *ct = &g_cracktro;
+
+    if (!build_cracktro_copper_list(ct)) {
+        draw_boot_screen(app->screen[0]);
+        wait_blitter();
+        patch_copper_bplptrs(&app->copper, app->screen[0]);
+        CREGS->cop1lc = (ULONG)app->copper.list;
+        CREGS->copjmp1 = 0;
+        CREGS->dmacon = DISPLAY_DMA_BITS;
+        g_sprite_dma_enabled = FALSE;
+        return;
+    }
+
+    draw_cracktro_screen(app->screen[0]);
+    wait_blitter();
+    patch_copper_bplptrs(&ct->copper, app->screen[0]);
+    patch_cracktro_copper_wave(ct, 0);
+
+    wait_frame_boundary_hw();
+    CREGS->cop1lc = (ULONG)ct->copper.list;
+    CREGS->copjmp1 = 0;
+    CREGS->dmacon = DISPLAY_DMA_BITS;
+    g_sprite_dma_enabled = FALSE;
+
+    fire_armed = joystick_fire_down() ? 0u : 1u;
+    while (TRUE) {
+        wait_frame_boundary_hw();
+        patch_cracktro_copper_wave(ct, (WORD)tick);
+        ++tick;
+        fire = joystick_fire_down() ? 1u : 0u;
+        if (!fire) {
+            fire_armed = 1u;
+        } else if (fire_armed) {
+            break;
+        }
+    }
+
+    wait_frame_boundary_hw();
+    patch_copper_bplptrs(&app->copper, app->screen[0]);
+    CREGS->cop1lc = (ULONG)app->copper.list;
+    CREGS->copjmp1 = 0;
+    free_cracktro_copper(ct);
+}
+
 static BOOL init_display(void) {
     g_old_view = ((struct GfxBase *)GfxBase)->ActiView;
     LoadView(NULL);
@@ -5195,6 +5482,7 @@ static void app_shutdown(AmigaApp *app) {
         app->wb_was_open = FALSE;
     }
     app_free(app);
+    restore_dos_requesters();
 }
 
 static uint32_t mix_seed(uint32_t seed, uint32_t value) {
@@ -5266,6 +5554,7 @@ int main(void) {
         return 20;
     }
 
+    suppress_dos_requesters();
     SetTaskPri(FindTask(NULL), TASK_PRIORITY);
     app->wb_was_open = CloseWorkBench() ? TRUE : FALSE;
 
@@ -5274,6 +5563,7 @@ int main(void) {
         if (app->wb_was_open) {
             OpenWorkBench();
         }
+        restore_dos_requesters();
         CloseLibrary((struct Library *)IntuitionBase);
         CloseLibrary((struct Library *)GfxBase);
         return 20;
@@ -5292,16 +5582,7 @@ int main(void) {
 #if AMIGA_HW_SPRITES_ENABLED
     patch_copper_spriteptrs(&app->copper, app->hw_sprite_bank[0]);
 #endif
-    draw_boot_screen(app->screen[0]);
-    wait_blitter();
-    patch_copper_bplptrs(&app->copper, app->screen[0]);
-#if AMIGA_HW_SPRITES_ENABLED
-    patch_copper_spriteptrs(&app->copper, app->hw_sprite_bank[0]);
-#endif
-    CREGS->cop1lc = (ULONG)app->copper.list;
-    CREGS->copjmp1 = 0;
-    CREGS->dmacon = DISPLAY_DMA_BITS;
-    g_sprite_dma_enabled = FALSE;
+    run_cracktro_intro(app);
 
     load_high_score_table(&g_high_scores);
     memset(&g_high_score_entry, 0, sizeof(g_high_score_entry));
@@ -5346,12 +5627,15 @@ int main(void) {
         }
         if (g_high_score_entry.active) {
             if (update_high_score_entry(&g_high_score_entry, &input)) {
+                remember_high_score_initials(g_high_score_entry.initials);
                 high_score_insert(
                     &g_high_scores,
                     g_high_score_entry.insert_index,
                     g_high_score_entry.initials,
                     g_high_score_entry.pending_score);
+#if HIGH_SCORE_DISK_SAVE_ENABLED
                 save_high_score_table(&g_high_scores);
+#endif
                 post_high_score_pause_ticks = (WORD)((GAME_FIXED_TICK_HZ * 3) / 5);
                 pending_post_game_over_resolution = FALSE;
                 pending_post_game_over_insert_index = -1;
@@ -5372,6 +5656,9 @@ int main(void) {
                         audio_events &= (uint32_t)~GAME_EVENT_ROUND_START;
                         title_jingle_queued = TRUE;
                     }
+                    game->start_was_down = false;
+                    game->fire_was_down = false;
+                    game->fire_confirm_armed = false;
                     sfx_dispatch_events(&app->sfx, audio_events);
                 }
             }
@@ -5409,8 +5696,7 @@ int main(void) {
                     begin_high_score_entry(
                         &g_high_score_entry,
                         pending_post_game_over_insert_index,
-                        pending_post_game_over_score,
-                        &g_high_scores);
+                        pending_post_game_over_score);
                     pending_post_game_over_resolution = FALSE;
                     pending_post_game_over_insert_index = -1;
                     pending_post_game_over_score = 0u;

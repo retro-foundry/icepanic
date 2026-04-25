@@ -64,6 +64,14 @@ SPRITE_ORDER: List[str] = [
     "SPR_MINE_0",
     "SPR_MINE_1",
     "SPR_MINE_2",
+    "SPR_ENEMY_C",
+    "SPR_ENEMY_C_ALT",
+    "SPR_ENEMY_C_DEATH_0",
+    "SPR_ENEMY_C_DEATH_1",
+    "SPR_ENEMY_D",
+    "SPR_ENEMY_D_ALT",
+    "SPR_ENEMY_D_DEATH_0",
+    "SPR_ENEMY_D_DEATH_1",
 ]
 
 

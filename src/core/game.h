@@ -76,7 +76,9 @@ typedef enum EnemyState {
 
 typedef enum EnemyType {
     ENEMY_TYPE_CHASER = 0,
-    ENEMY_TYPE_WANDERER = 1
+    ENEMY_TYPE_WANDERER = 1,
+    ENEMY_TYPE_HUNTER = 2,
+    ENEMY_TYPE_GHOST = 3
 } EnemyType;
 
 typedef enum GamePhase {
@@ -145,7 +147,9 @@ typedef enum ImpactFxStyle {
     IMPACT_FX_STYLE_CRACKED_CRUSH = 5,
     IMPACT_FX_STYLE_MINE_BLAST = 6,
     IMPACT_FX_STYLE_ENEMY_DEATH_A = 7,
-    IMPACT_FX_STYLE_ENEMY_DEATH_B = 8
+    IMPACT_FX_STYLE_ENEMY_DEATH_B = 8,
+    IMPACT_FX_STYLE_ENEMY_DEATH_C = 9,
+    IMPACT_FX_STYLE_ENEMY_DEATH_D = 10
 } ImpactFxStyle;
 
 typedef struct InputState {
@@ -162,6 +166,8 @@ typedef struct InputState {
 typedef struct RoundConfig {
     int enemy_count;
     int enemy_wanderer_count;
+    int enemy_hunter_count;
+    int enemy_ghost_count;
     int enemy_speed_fp;
     int aggression_percent;
     int round_time_ticks;

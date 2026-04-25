@@ -4,9 +4,9 @@
 01 -> SPR_WALL -> (1,0) -> Solid wall tile for interior blockers.
 02 -> SPR_BORDER -> (2,0) -> Bright perimeter wall tile.
 03 -> SPR_BLOCK_ICE -> (3,0) -> Pushable ice block tile.
-04 -> SPR_BLOCK_SPECIAL -> (4,0) -> Special block with diamond core.
-05 -> SPR_BLOCK_CRACKED -> (5,0) -> Cracked variant of pushable ice.
-06 -> SPR_BLOCK_UNBREAKABLE -> (6,0) -> Heavy unbreakable block.
+04 -> SPR_BLOCK_SPECIAL -> (4,0) -> Deprecated visual slot (mirrors SPR_BLOCK_ICE).
+05 -> SPR_BLOCK_CRACKED -> (5,0) -> Deprecated visual slot (mirrors SPR_BLOCK_ICE).
+06 -> SPR_BLOCK_UNBREAKABLE -> (6,0) -> Deprecated visual slot (mirrors SPR_BLOCK_ICE).
 07 -> SPR_PLAYER_UP -> (7,0) -> Penguin player facing up.
 08 -> SPR_PLAYER_UP_ALT -> (0,1) -> Penguin player facing up (step frame).
 09 -> SPR_PLAYER_DOWN -> (1,1) -> Penguin player facing down.
@@ -33,3 +33,11 @@
 30 -> SPR_MINE_0 -> (6,3) -> Bomb sprite (steady fuse frame).
 31 -> SPR_MINE_1 -> (7,3) -> Bomb sprite (warning fuse frame).
 32 -> SPR_MINE_2 -> (0,4) -> Bomb sprite (critical fuse frame).
+33 -> SPR_ENEMY_C -> (1,4) -> Hunter enemy sprite.
+34 -> SPR_ENEMY_C_ALT -> (2,4) -> Hunter enemy sprite (bobbing frame).
+35 -> SPR_ENEMY_C_DEATH_0 -> (3,4) -> Hunter death animation frame 1.
+36 -> SPR_ENEMY_C_DEATH_1 -> (4,4) -> Hunter death animation frame 2.
+37 -> SPR_ENEMY_D -> (5,4) -> Ghost enemy sprite.
+38 -> SPR_ENEMY_D_ALT -> (6,4) -> Ghost enemy sprite (drifting frame).
+39 -> SPR_ENEMY_D_DEATH_0 -> (7,4) -> Ghost death animation frame 1.
+40 -> SPR_ENEMY_D_DEATH_1 -> (0,5) -> Ghost death animation frame 2.

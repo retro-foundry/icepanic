@@ -101,6 +101,14 @@ SPRITE_ORDER: List[str] = [
     "SPR_MINE_0",
     "SPR_MINE_1",
     "SPR_MINE_2",
+    "SPR_ENEMY_C",
+    "SPR_ENEMY_C_ALT",
+    "SPR_ENEMY_C_DEATH_0",
+    "SPR_ENEMY_C_DEATH_1",
+    "SPR_ENEMY_D",
+    "SPR_ENEMY_D_ALT",
+    "SPR_ENEMY_D_DEATH_0",
+    "SPR_ENEMY_D_DEATH_1",
 ]
 
 SPRITE_NOTES = {
@@ -137,6 +145,14 @@ SPRITE_NOTES = {
     "SPR_MINE_0": "Bomb sprite (steady fuse frame).",
     "SPR_MINE_1": "Bomb sprite (warning fuse frame).",
     "SPR_MINE_2": "Bomb sprite (critical fuse frame).",
+    "SPR_ENEMY_C": "Hunter enemy sprite.",
+    "SPR_ENEMY_C_ALT": "Hunter enemy sprite (bobbing frame).",
+    "SPR_ENEMY_C_DEATH_0": "Hunter death animation frame 1.",
+    "SPR_ENEMY_C_DEATH_1": "Hunter death animation frame 2.",
+    "SPR_ENEMY_D": "Ghost enemy sprite.",
+    "SPR_ENEMY_D_ALT": "Ghost enemy sprite (drifting frame).",
+    "SPR_ENEMY_D_DEATH_0": "Ghost death animation frame 1.",
+    "SPR_ENEMY_D_DEATH_1": "Ghost death animation frame 2.",
 }
 
 
@@ -429,10 +445,57 @@ def draw_blob_enemy(kind: str, pose: int = 0) -> List[List[int]]:
     t = new_tile(0)
     if kind == "chaser":
         dark, mid, light = 17, 18, 19
-    else:
+    elif kind == "wanderer":
         dark, mid, light = 14, 15, 16
+    elif kind == "hunter":
+        dark, mid, light = 24, 28, 29
+    else:
+        dark, mid, light = 20, 21, 31
 
     yoff = 0
+    if kind == "hunter":
+        fill_ellipse(t, 8, 9, 5, 4, dark)
+        fill_ellipse(t, 8, 8, 4, 4, mid)
+        fill_ellipse(t, 8, 7, 3, 2, light)
+        rect(t, 7, 2, 2, 4, dark)
+        rect(t, 2, 8, 4, 2, dark)
+        rect(t, 10, 8, 4, 2, dark)
+        if pose != 0:
+            rect(t, 7, 2, 2, 4, 0)
+            rect(t, 7, 1, 2, 4, dark)
+            rect(t, 2, 8, 4, 2, 0)
+            rect(t, 1, 8, 4, 2, dark)
+            rect(t, 10, 8, 4, 2, 0)
+            rect(t, 11, 8, 4, 2, dark)
+        rect(t, 6, 8, 2, 2, 31)
+        rect(t, 9, 8, 2, 2, 31)
+        set_px(t, 6, 9, 12)
+        set_px(t, 9, 9, 12)
+        set_px(t, 8, 7, 12)
+        return t
+
+    if kind == "ghost":
+        fill_ellipse(t, 8, 9, 5, 5, dark)
+        fill_ellipse(t, 8, 8, 4, 4, mid)
+        fill_ellipse(t, 8, 6, 3, 2, light)
+        rect(t, 5, 11, 2, 2, mid)
+        rect(t, 8, 11, 2, 3, dark)
+        rect(t, 11, 10, 1, 2, mid)
+        if pose != 0:
+            rect(t, 5, 11, 2, 2, 0)
+            rect(t, 8, 11, 2, 3, 0)
+            rect(t, 11, 10, 1, 2, 0)
+            rect(t, 4, 11, 2, 3, dark)
+            rect(t, 7, 11, 2, 2, mid)
+            rect(t, 10, 11, 2, 2, dark)
+            set_px(t, 8, 5, light)
+        set_px(t, 6, 7, 3)
+        set_px(t, 9, 7, 3)
+        set_px(t, 5, 8, light)
+        set_px(t, 10, 8, light)
+        set_px(t, 8, 9, 31)
+        return t
+
     fill_ellipse(t, 8, 9 + yoff, 5, 4, dark)
     fill_ellipse(t, 8, 8 + yoff, 4, 4, mid)
     fill_ellipse(t, 8, 7 + yoff, 3, 2, light)
@@ -463,9 +526,32 @@ def draw_blob_enemy_death(kind: str, frame: int = 0) -> List[List[int]]:
     if kind == "chaser":
         dark, mid, light = 17, 18, 19
         eye = 2
-    else:
+    elif kind == "wanderer":
         dark, mid, light = 14, 15, 16
         eye = 3
+    elif kind == "hunter":
+        dark, mid, light = 24, 28, 29
+        eye = 12
+    else:
+        dark, mid, light = 20, 21, 31
+        eye = 3
+
+    if kind == "ghost":
+        if frame == 0:
+            fill_ellipse(t, 8, 10, 5, 2, mid)
+            fill_ellipse(t, 8, 8, 4, 2, dark)
+            line(t, 4, 6, 7, 10, light)
+            line(t, 11, 6, 8, 10, light)
+            set_px(t, 6, 8, eye)
+            set_px(t, 9, 8, eye)
+        else:
+            fill_ellipse(t, 8, 11, 4, 1, mid)
+            fill_ellipse(t, 8, 9, 3, 1, dark)
+            set_px(t, 4, 7, light)
+            set_px(t, 11, 8, light)
+            set_px(t, 7, 10, eye)
+            set_px(t, 9, 10, eye)
+        return t
 
     if frame == 0:
         fill_ellipse(t, 8, 10, 5, 3, dark)
@@ -700,6 +786,14 @@ def build_tiles() -> List[List[int]]:
         "SPR_MINE_0": draw_mine(frame=0),
         "SPR_MINE_1": draw_mine(frame=1),
         "SPR_MINE_2": draw_mine(frame=2),
+        "SPR_ENEMY_C": draw_blob_enemy("hunter", pose=0),
+        "SPR_ENEMY_C_ALT": draw_blob_enemy("hunter", pose=1),
+        "SPR_ENEMY_C_DEATH_0": draw_blob_enemy_death("hunter", frame=0),
+        "SPR_ENEMY_C_DEATH_1": draw_blob_enemy_death("hunter", frame=1),
+        "SPR_ENEMY_D": draw_blob_enemy("ghost", pose=0),
+        "SPR_ENEMY_D_ALT": draw_blob_enemy("ghost", pose=1),
+        "SPR_ENEMY_D_DEATH_0": draw_blob_enemy_death("ghost", frame=0),
+        "SPR_ENEMY_D_DEATH_1": draw_blob_enemy_death("ghost", frame=1),
     }
     return [tile_to_linear_bytes(tile_maps[name]) for name in SPRITE_ORDER]
 

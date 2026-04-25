@@ -79,12 +79,19 @@ enum {
     META_SCORE_STEP_PERMILLE = 50,
     META_ENEMY_SLOW_STEP_FP = FP_ONE / 8,
 
+    PLAYER_HITBOX_LEFT_FP = 3 * FP_ONE,
+    PLAYER_HITBOX_TOP_FP = 2 * FP_ONE,
+    PLAYER_HITBOX_RIGHT_FP = 13 * FP_ONE,
+    PLAYER_HITBOX_BOTTOM_FP = 14 * FP_ONE,
+    ENEMY_HITBOX_LEFT_FP = 3 * FP_ONE,
+    ENEMY_HITBOX_TOP_FP = 4 * FP_ONE,
+    ENEMY_HITBOX_RIGHT_FP = 13 * FP_ONE,
+    ENEMY_HITBOX_BOTTOM_FP = 13 * FP_ONE,
+
     SHARDS_PER_CRUSH = 1,
     SHARDS_PER_ITEM = 1,
     SHARDS_PER_MYSTERY_ITEM = 2,
-    SHARDS_PER_ROUND_CLEAR = 3,
-
-    PLAYER_ENEMY_CONTACT_THRESHOLD_FP = (GAME_TILE_SIZE / 3) * FP_ONE
+    SHARDS_PER_ROUND_CLEAR = 3
 };
 
 static const uint32_t SCORE_CAP = 99999999u;
@@ -1875,19 +1882,60 @@ static bool consume_fire_confirm_release(GameState *gs, const InputState *in) {
 static int count_alive_enemies(const GameState *gs) {
     int alive = 0;
     uint16_t mask = live_enemy_mask_for_game(gs);
-    while (mask != 0u) {
-        alive += (int)(mask & 1u);
-        mask >>= 1;
+    for (int i = 0; mask != 0u && i < gs->enemy_count; ++i, mask >>= 1) {
+        if ((mask & 1u) != 0u && gs->enemies[i].alive && gs->enemies[i].type != ENEMY_TYPE_GHOST) {
+            ++alive;
+        }
     }
     if (alive > 0 || gs->alive_enemy_count <= 0) {
         return alive;
     }
     for (int i = 0; i < gs->enemy_count; ++i) {
-        if (gs->enemies[i].alive) {
+        if (gs->enemies[i].alive && gs->enemies[i].type != ENEMY_TYPE_GHOST) {
             ++alive;
         }
     }
     return alive;
+}
+
+static bool enemy_is_killable(const Enemy *enemy) {
+    return enemy->type != ENEMY_TYPE_GHOST;
+}
+
+static bool enemy_can_trigger_mine(const Enemy *enemy) {
+    return enemy->type != ENEMY_TYPE_GHOST;
+}
+
+static bool any_live_enemy_active(const GameState *gs) {
+    uint16_t mask = live_enemy_mask_for_game(gs);
+    for (int i = 0; mask != 0u && i < gs->enemy_count; ++i, mask >>= 1) {
+        if ((mask & 1u) != 0u && gs->enemies[i].alive) {
+            return true;
+        }
+    }
+    for (int i = 0; i < gs->enemy_count; ++i) {
+        if (gs->enemies[i].alive) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void clear_enemy_alive_bit(GameState *gs, int enemy_idx) {
+    gs->alive_enemy_mask &= (uint16_t)~slot_bit(enemy_idx);
+}
+
+static void mark_enemy_defeated(GameState *gs, int enemy_idx) {
+    Enemy *enemy = &gs->enemies[enemy_idx];
+    if (!enemy->alive) {
+        clear_enemy_alive_bit(gs, enemy_idx);
+        return;
+    }
+    enemy->alive = false;
+    clear_enemy_alive_bit(gs, enemy_idx);
+    if (enemy_is_killable(enemy) && gs->alive_enemy_count > 0) {
+        --gs->alive_enemy_count;
+    }
 }
 
 static int live_enemy_count_fast(const GameState *gs) {
@@ -2014,6 +2062,7 @@ static bool tile_walkable_for_enemy_with_occupancy(
     const GameState *gs,
     const uint32_t occupancy[GAME_GRID_HEIGHT],
     const uint32_t moving_block_occupancy[GAME_GRID_HEIGHT],
+    EnemyType enemy_type,
     int x,
     int y) {
     if (!inside_grid(x, y)) {
@@ -2022,7 +2071,7 @@ static bool tile_walkable_for_enemy_with_occupancy(
     if (terrain_blocks(gs->terrain[y][x])) {
         return false;
     }
-    if (gs->blocks[y][x] != BLOCK_NONE) {
+    if (enemy_type != ENEMY_TYPE_GHOST && gs->blocks[y][x] != BLOCK_NONE) {
         return false;
     }
     if (occupancy_has_tile(moving_block_occupancy, x, y)) {
@@ -2314,6 +2363,21 @@ static void apply_stage_modifier_to_round_config(GameState *gs) {
         case STAGE_MOD_NONE:
         default:
             break;
+    }
+    {
+        const int special_slots = (gs->round_config.enemy_count > 1) ? (gs->round_config.enemy_count - 1) : 0;
+        gs->round_config.enemy_ghost_count = clampi(
+            gs->round_config.enemy_ghost_count,
+            0,
+            min_int(1, special_slots));
+        gs->round_config.enemy_hunter_count = clampi(
+            gs->round_config.enemy_hunter_count,
+            0,
+            special_slots - gs->round_config.enemy_ghost_count);
+        gs->round_config.enemy_wanderer_count = clampi(
+            gs->round_config.enemy_wanderer_count,
+            0,
+            special_slots - gs->round_config.enemy_ghost_count - gs->round_config.enemy_hunter_count);
     }
 }
 
@@ -3544,13 +3608,31 @@ static void setup_round_config(GameState *gs, int round_index) {
     }
     {
         int wanderers = 0;
+        int hunters = 0;
+        int ghosts = 0;
+        int special_slots;
         if (round >= 4) {
             wanderers = 1 + (round - 4) / 4;
         }
+        if (round >= 8) {
+            hunters = 1 + (round - 8) / 5;
+        }
+        if (round >= 12) {
+            ghosts = 1 + (round - 12) / 6;
+        }
+        special_slots = (gs->round_config.enemy_count > 1) ? (gs->round_config.enemy_count - 1) : 0;
+        gs->round_config.enemy_ghost_count = clampi(
+            ghosts,
+            0,
+            min_int(1, special_slots));
+        gs->round_config.enemy_hunter_count = clampi(
+            hunters,
+            0,
+            special_slots - gs->round_config.enemy_ghost_count);
         gs->round_config.enemy_wanderer_count = clampi(
             wanderers,
             0,
-            gs->round_config.enemy_count - 1);
+            special_slots - gs->round_config.enemy_ghost_count - gs->round_config.enemy_hunter_count);
     }
     gs->round_config.enemy_speed_fp = FP_ONE + (((round - 1) / 3) * (FP_ONE / 8));
     gs->round_config.enemy_speed_fp = clampi(gs->round_config.enemy_speed_fp, FP_ONE, (9 * FP_ONE) / 4);
@@ -3587,7 +3669,40 @@ static void reset_player_runtime_state(GameState *gs, int tile_x, int tile_y) {
     gs->player.mine_drop_queued = false;
 }
 
-static bool tile_is_safe_respawn(const GameState *gs, int x, int y) {
+static bool moving_block_overlaps_tile(const MovingBlock *mb, int tile_x, int tile_y) {
+    const GamePixelFp tile_left = tile_to_fp(tile_x);
+    const GamePixelFp tile_top = tile_to_fp(tile_y);
+    const GamePixelFp tile_right = tile_left + (GamePixelFp)TILE_FP;
+    const GamePixelFp tile_bottom = tile_top + (GamePixelFp)TILE_FP;
+    const GamePixelFp block_left = mb->pixel_fp_x;
+    const GamePixelFp block_top = mb->pixel_fp_y;
+    const GamePixelFp block_right = block_left + (GamePixelFp)TILE_FP;
+    const GamePixelFp block_bottom = block_top + (GamePixelFp)TILE_FP;
+
+    return block_left < tile_right &&
+           block_right > tile_left &&
+           block_top < tile_bottom &&
+           block_bottom > tile_top;
+}
+
+static bool respawn_tile_has_moving_block_overlap(const GameState *gs, int x, int y) {
+    uint16_t mask = active_moving_block_mask_for_game(gs);
+    for (int i = 0; mask != 0u && i < GAME_MAX_MOVING_BLOCKS; ++i, mask >>= 1) {
+        const MovingBlock *mb = &gs->moving_blocks[i];
+        if ((mask & 1u) == 0u || !mb->active) {
+            continue;
+        }
+        if (mb->tile_x == x && mb->tile_y == y) {
+            return true;
+        }
+        if (moving_block_overlaps_tile(mb, x, y)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool respawn_candidate_base_open(const GameState *gs, int x, int y) {
     if (!inside_grid(x, y)) {
         return false;
     }
@@ -3597,57 +3712,157 @@ static bool tile_is_safe_respawn(const GameState *gs, int x, int y) {
     if (gs->blocks[y][x] != BLOCK_NONE) {
         return false;
     }
-    if (tile_has_moving_block(gs, x, y, -1)) {
+    if (gs->mines[y][x]) {
+        return false;
+    }
+    if (respawn_tile_has_moving_block_overlap(gs, x, y)) {
+        return false;
+    }
+    return true;
+}
+
+static bool respawn_player_would_touch_enemy(const Enemy *enemy, int tile_x, int tile_y) {
+    const GamePixelFp player_x = tile_to_fp(tile_x);
+    const GamePixelFp player_y = tile_to_fp(tile_y);
+    const GamePixelFp player_left = player_x + (GamePixelFp)PLAYER_HITBOX_LEFT_FP;
+    const GamePixelFp player_top = player_y + (GamePixelFp)PLAYER_HITBOX_TOP_FP;
+    const GamePixelFp player_right = player_x + (GamePixelFp)PLAYER_HITBOX_RIGHT_FP;
+    const GamePixelFp player_bottom = player_y + (GamePixelFp)PLAYER_HITBOX_BOTTOM_FP;
+    const GamePixelFp enemy_left = enemy->pixel_fp_x + (GamePixelFp)ENEMY_HITBOX_LEFT_FP;
+    const GamePixelFp enemy_top = enemy->pixel_fp_y + (GamePixelFp)ENEMY_HITBOX_TOP_FP;
+    const GamePixelFp enemy_right = enemy->pixel_fp_x + (GamePixelFp)ENEMY_HITBOX_RIGHT_FP;
+    const GamePixelFp enemy_bottom = enemy->pixel_fp_y + (GamePixelFp)ENEMY_HITBOX_BOTTOM_FP;
+
+    return player_left < enemy_right &&
+           player_right > enemy_left &&
+           player_top < enemy_bottom &&
+           player_bottom > enemy_top;
+}
+
+static int respawn_min_enemy_distance(const GameState *gs, int x, int y) {
+    int min_dist = 9999;
+    uint16_t enemy_mask = live_enemy_mask_for_game(gs);
+    for (int i = 0; enemy_mask != 0u && i < gs->enemy_count; ++i, enemy_mask >>= 1) {
+        const Enemy *enemy = &gs->enemies[i];
+        int dist;
+        if ((enemy_mask & 1u) == 0u || !enemy->alive) {
+            continue;
+        }
+        if (respawn_player_would_touch_enemy(enemy, x, y)) {
+            return -1;
+        }
+        dist = abs(enemy->tile_x - x) + abs(enemy->tile_y - y);
+        if (dist < min_dist) {
+            min_dist = dist;
+        }
+    }
+    return min_dist;
+}
+
+static int respawn_floor_exit_count(const GameState *gs, int x, int y) {
+    int exits = 0;
+    for (Direction d = DIR_UP; d <= DIR_RIGHT; d = (Direction)(d + 1)) {
+        const int nx = x + kDirDx[d];
+        const int ny = y + kDirDy[d];
+        if (!respawn_candidate_base_open(gs, nx, ny)) {
+            continue;
+        }
+        if (tile_has_enemy(gs, nx, ny, -1)) {
+            continue;
+        }
+        ++exits;
+    }
+    return exits;
+}
+
+static bool tile_is_safe_respawn(const GameState *gs, int x, int y, int min_enemy_dist, int min_exits) {
+    int enemy_dist;
+    if (!respawn_candidate_base_open(gs, x, y)) {
         return false;
     }
     if (tile_has_enemy(gs, x, y, -1)) {
         return false;
     }
-    {
-    uint16_t enemy_mask = live_enemy_mask_for_game(gs);
-    for (int i = 0; enemy_mask != 0u && i < gs->enemy_count; ++i, enemy_mask >>= 1) {
-        if ((enemy_mask & 1u) == 0u || !gs->enemies[i].alive) {
-            continue;
-        }
-        const int dx = abs(gs->enemies[i].tile_x - x);
-        const int dy = abs(gs->enemies[i].tile_y - y);
-        if (dx + dy <= 1) {
-            return false;
-        }
+    enemy_dist = respawn_min_enemy_distance(gs, x, y);
+    if (enemy_dist >= 0 && enemy_dist < min_enemy_dist) {
+        return false;
     }
+    if (respawn_floor_exit_count(gs, x, y) < min_exits) {
+        return false;
     }
     return true;
 }
 
+static int respawn_tile_score(const GameState *gs, int x, int y, int sx, int sy) {
+    const int exits = respawn_floor_exit_count(gs, x, y);
+    int enemy_dist = respawn_min_enemy_distance(gs, x, y);
+    if (enemy_dist < 0) {
+        return -30000;
+    }
+    if (enemy_dist > 12) {
+        enemy_dist = 12;
+    }
+    return enemy_dist * 100 + exits * 20 - (abs(x - sx) + abs(y - sy));
+}
+
 static void find_safe_respawn_tile(const GameState *gs, int *out_x, int *out_y) {
+    enum {
+        RESPAWN_IDEAL_ENEMY_DISTANCE = 4,
+        RESPAWN_HARD_ENEMY_DISTANCE = 2
+    };
     const int sx = gs->player_spawn_x;
     const int sy = gs->player_spawn_y;
-    if (tile_is_safe_respawn(gs, sx, sy)) {
+    int best_x = sx;
+    int best_y = sy;
+    int best_score = -30000;
+
+    for (int min_dist = RESPAWN_IDEAL_ENEMY_DISTANCE; min_dist >= RESPAWN_HARD_ENEMY_DISTANCE; --min_dist) {
+        for (int min_exits = 2; min_exits >= 0; --min_exits) {
+            for (int y = 1; y < GAME_GRID_HEIGHT - 1; ++y) {
+                for (int x = 1; x < GAME_GRID_WIDTH - 1; ++x) {
+                    int score;
+                    if (!tile_is_safe_respawn(gs, x, y, min_dist, min_exits)) {
+                        continue;
+                    }
+                    score = respawn_tile_score(gs, x, y, sx, sy);
+                    if (score > best_score) {
+                        best_score = score;
+                        best_x = x;
+                        best_y = y;
+                    }
+                }
+            }
+            if (best_score > -30000) {
+                *out_x = best_x;
+                *out_y = best_y;
+                return;
+            }
+        }
+    }
+
+    if (respawn_candidate_base_open(gs, sx, sy) && !tile_has_enemy(gs, sx, sy, -1)) {
         *out_x = sx;
         *out_y = sy;
         return;
     }
 
-    const int max_radius = GAME_GRID_WIDTH + GAME_GRID_HEIGHT;
-    for (int r = 1; r <= max_radius; ++r) {
-        for (int dy = -r; dy <= r; ++dy) {
-            for (int dx = -r; dx <= r; ++dx) {
-                if (abs(dx) != r && abs(dy) != r) {
-                    continue;
-                }
-                const int tx = sx + dx;
-                const int ty = sy + dy;
-                if (tile_is_safe_respawn(gs, tx, ty)) {
-                    *out_x = tx;
-                    *out_y = ty;
-                    return;
-                }
+    for (int y = 1; y < GAME_GRID_HEIGHT - 1; ++y) {
+        for (int x = 1; x < GAME_GRID_WIDTH - 1; ++x) {
+            int score;
+            if (!respawn_candidate_base_open(gs, x, y) || tile_has_enemy(gs, x, y, -1)) {
+                continue;
+            }
+            score = respawn_tile_score(gs, x, y, sx, sy);
+            if (score > best_score) {
+                best_score = score;
+                best_x = x;
+                best_y = y;
             }
         }
     }
 
-    *out_x = sx;
-    *out_y = sy;
+    *out_x = best_x;
+    *out_y = best_y;
 }
 
 static void kill_player(GameState *gs) {
@@ -3683,6 +3898,12 @@ static ImpactFxStyle crush_style_for_block(BlockType type) {
 }
 
 static ImpactFxStyle death_style_for_enemy_type(EnemyType type) {
+    if (type == ENEMY_TYPE_GHOST) {
+        return IMPACT_FX_STYLE_ENEMY_DEATH_D;
+    }
+    if (type == ENEMY_TYPE_HUNTER) {
+        return IMPACT_FX_STYLE_ENEMY_DEATH_C;
+    }
     if (type == ENEMY_TYPE_WANDERER) {
         return IMPACT_FX_STYLE_ENEMY_DEATH_B;
     }
@@ -3716,6 +3937,39 @@ static bool enemy_overlaps_tile(const Enemy *enemy, int tile_x, int tile_y) {
            enemy_bottom > tile_top;
 }
 
+static bool player_overlaps_tile(const Player *player, int tile_x, int tile_y) {
+    const GamePixelFp tile_left = tile_to_fp(tile_x);
+    const GamePixelFp tile_top = tile_to_fp(tile_y);
+    const GamePixelFp tile_right = tile_left + (GamePixelFp)TILE_FP;
+    const GamePixelFp tile_bottom = tile_top + (GamePixelFp)TILE_FP;
+
+    const GamePixelFp player_left = player->pixel_fp_x;
+    const GamePixelFp player_top = player->pixel_fp_y;
+    const GamePixelFp player_right = player_left + (GamePixelFp)TILE_FP;
+    const GamePixelFp player_bottom = player_top + (GamePixelFp)TILE_FP;
+
+    return player_left < tile_right &&
+           player_right > tile_left &&
+           player_top < tile_bottom &&
+           player_bottom > tile_top;
+}
+
+static bool player_touches_enemy(const Player *player, const Enemy *enemy) {
+    const GamePixelFp player_left = player->pixel_fp_x + (GamePixelFp)PLAYER_HITBOX_LEFT_FP;
+    const GamePixelFp player_top = player->pixel_fp_y + (GamePixelFp)PLAYER_HITBOX_TOP_FP;
+    const GamePixelFp player_right = player->pixel_fp_x + (GamePixelFp)PLAYER_HITBOX_RIGHT_FP;
+    const GamePixelFp player_bottom = player->pixel_fp_y + (GamePixelFp)PLAYER_HITBOX_BOTTOM_FP;
+    const GamePixelFp enemy_left = enemy->pixel_fp_x + (GamePixelFp)ENEMY_HITBOX_LEFT_FP;
+    const GamePixelFp enemy_top = enemy->pixel_fp_y + (GamePixelFp)ENEMY_HITBOX_TOP_FP;
+    const GamePixelFp enemy_right = enemy->pixel_fp_x + (GamePixelFp)ENEMY_HITBOX_RIGHT_FP;
+    const GamePixelFp enemy_bottom = enemy->pixel_fp_y + (GamePixelFp)ENEMY_HITBOX_BOTTOM_FP;
+
+    return player_left < enemy_right &&
+           player_right > enemy_left &&
+           player_top < enemy_bottom &&
+           player_bottom > enemy_top;
+}
+
 static void crush_enemies_on_tile(
     GameState *gs,
     int x,
@@ -3725,19 +3979,17 @@ static void crush_enemies_on_tile(
     bool reduced_score) {
     uint16_t enemy_mask = live_enemy_mask_for_game(gs);
     for (int i = 0; enemy_mask != 0u && i < gs->enemy_count; ++i, enemy_mask >>= 1) {
-        uint16_t bit = slot_bit(i);
         Enemy *enemy = &gs->enemies[i];
         if ((enemy_mask & 1u) == 0u || !enemy->alive) {
+            continue;
+        }
+        if (!enemy_is_killable(enemy)) {
             continue;
         }
         if ((enemy->tile_x != x || enemy->tile_y != y) && !enemy_overlaps_tile(enemy, x, y)) {
             continue;
         }
-        enemy->alive = false;
-        gs->alive_enemy_mask &= (uint16_t)~bit;
-        if (gs->alive_enemy_count > 0) {
-            --gs->alive_enemy_count;
-        }
+        mark_enemy_defeated(gs, i);
         enemy->state = ENEMY_CRUSHED;
         spawn_impact_fx_on_tile(
             gs,
@@ -3983,6 +4235,10 @@ static void trigger_mine_explosion(GameState *gs, int start_x, int start_y) {
 
             spawn_impact_fx_on_tile(gs, bx, by, IMPACT_FX_STYLE_MINE_BLAST, MINE_EXPLOSION_TTL_TICKS);
 
+            if (gs->player.alive && player_overlaps_tile(&gs->player, bx, by)) {
+                kill_player(gs);
+            }
+
             if (gs->items[by][bx] != ITEM_NONE) {
                 gs->items[by][bx] = ITEM_NONE;
                 unregister_active_item(gs, bx, by);
@@ -4107,11 +4363,6 @@ static bool try_start_player_action(GameState *gs, Direction dir) {
     if (!inside_grid(nx, ny) || terrain_blocks(gs->terrain[ny][nx])) {
         player_bump(player, dir);
         return false;
-    }
-
-    if (tile_has_enemy(gs, nx, ny, -1)) {
-        kill_player(gs);
-        return true;
     }
 
     if (tile_has_moving_block(gs, nx, ny, -1)) {
@@ -4331,7 +4582,7 @@ static int enemy_decision_pause_ticks(
     for (Direction d = DIR_UP; d <= DIR_RIGHT; d = (Direction)(d + 1)) {
         const int nx = enemy->tile_x + kDirDx[d];
         const int ny = enemy->tile_y + kDirDy[d];
-        if (!tile_walkable_for_enemy_with_occupancy(gs, occupancy, moving_block_occupancy, nx, ny)) {
+        if (!tile_walkable_for_enemy_with_occupancy(gs, occupancy, moving_block_occupancy, enemy->type, nx, ny)) {
             continue;
         }
         valid[valid_count++] = d;
@@ -4381,6 +4632,150 @@ static void enemy_step_movement(Enemy *enemy) {
     }
 }
 
+static Direction turn_left_direction(Direction d) {
+    switch (d) {
+        case DIR_UP:
+            return DIR_LEFT;
+        case DIR_DOWN:
+            return DIR_RIGHT;
+        case DIR_LEFT:
+            return DIR_DOWN;
+        case DIR_RIGHT:
+            return DIR_UP;
+        default:
+            return DIR_NONE;
+    }
+}
+
+static Direction turn_right_direction(Direction d) {
+    switch (d) {
+        case DIR_UP:
+            return DIR_RIGHT;
+        case DIR_DOWN:
+            return DIR_LEFT;
+        case DIR_LEFT:
+            return DIR_UP;
+        case DIR_RIGHT:
+            return DIR_DOWN;
+        default:
+            return DIR_NONE;
+    }
+}
+
+static bool direction_in_list(const Direction *dirs, int count, Direction dir) {
+    if (dir == DIR_NONE) {
+        return false;
+    }
+    for (int i = 0; i < count; ++i) {
+        if (dirs[i] == dir) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static Direction pick_direction_from_list(GameState *gs, const Direction *dirs, int count) {
+    if (count <= 0) {
+        return DIR_NONE;
+    }
+#if defined(ICEPANIC_AMIGA_SMALL_STACK)
+    return dirs[rng_pick_small(gs, count)];
+#else
+    return dirs[rng_next(gs) % (uint32_t)count];
+#endif
+}
+
+static Direction choose_wanderer_direction(GameState *gs, const Enemy *enemy, const Direction *valid, int valid_count) {
+    Direction pool[4];
+    Direction candidates[2];
+    int pool_count = 0;
+    int candidate_count = 0;
+    const int current_dist = abs_int_fast(gs->player.tile_x - enemy->tile_x) +
+                             abs_int_fast(gs->player.tile_y - enemy->tile_y);
+    const Direction left = turn_left_direction(enemy->direction);
+    const Direction right = turn_right_direction(enemy->direction);
+    const Direction reverse = opposite_direction(enemy->direction);
+    uint32_t roll;
+
+    if (valid_count <= 1) {
+        return valid_count == 1 ? valid[0] : DIR_NONE;
+    }
+
+    for (int i = 0; i < valid_count; ++i) {
+        const Direction d = valid[i];
+        const int nx = enemy->tile_x + kDirDx[d];
+        const int ny = enemy->tile_y + kDirDy[d];
+        const int dist = abs_int_fast(gs->player.tile_x - nx) + abs_int_fast(gs->player.tile_y - ny);
+        if (!gs->player.alive || dist >= current_dist) {
+            pool[pool_count++] = d;
+        }
+    }
+    if (pool_count <= 0) {
+        for (int i = 0; i < valid_count; ++i) {
+            pool[pool_count++] = valid[i];
+        }
+    }
+
+    roll = rng_next(gs) & 0xFFu;
+    if (roll < 160u) {
+        if (direction_in_list(pool, pool_count, left)) {
+            candidates[candidate_count++] = left;
+        }
+        if (direction_in_list(pool, pool_count, right)) {
+            candidates[candidate_count++] = right;
+        }
+    } else if (roll < 216u) {
+        if (direction_in_list(pool, pool_count, enemy->direction)) {
+            candidates[candidate_count++] = enemy->direction;
+        }
+    } else if (roll < 240u) {
+        if (direction_in_list(pool, pool_count, reverse)) {
+            candidates[candidate_count++] = reverse;
+        }
+    }
+
+    if (candidate_count > 0) {
+        return pick_direction_from_list(gs, candidates, candidate_count);
+    }
+    return pick_direction_from_list(gs, pool, pool_count);
+}
+
+static Direction choose_hunter_direction(GameState *gs, const Enemy *enemy, const Direction *valid, int valid_count) {
+    Direction best[4];
+    int best_count = 0;
+    int best_distance = 9999;
+
+    if (valid_count <= 1) {
+        return valid_count == 1 ? valid[0] : DIR_NONE;
+    }
+    if (!gs->player.alive) {
+        return pick_direction_from_list(gs, valid, valid_count);
+    }
+
+    for (int i = 0; i < valid_count; ++i) {
+        const Direction d = valid[i];
+        const int nx = enemy->tile_x + kDirDx[d];
+        const int ny = enemy->tile_y + kDirDy[d];
+        const int dist = abs_int_fast(gs->player.tile_x - nx) + abs_int_fast(gs->player.tile_y - ny);
+        if (dist < best_distance) {
+            best_distance = dist;
+            best[0] = d;
+            best_count = 1;
+        } else if (dist == best_distance && best_count < 4) {
+            best[best_count++] = d;
+        }
+    }
+
+    if (direction_in_list(best, best_count, enemy->direction)) {
+        return enemy->direction;
+    }
+    return pick_direction_from_list(gs, best, best_count);
+}
+
+static Direction choose_ghost_direction(GameState *gs, const Enemy *enemy, const Direction *valid, int valid_count) {
+    return choose_hunter_direction(gs, enemy, valid, valid_count);
+}
+
 static Direction choose_enemy_direction(
     GameState *gs,
     int enemy_idx,
@@ -4392,7 +4787,7 @@ static Direction choose_enemy_direction(
     for (Direction d = DIR_UP; d <= DIR_RIGHT; d = (Direction)(d + 1)) {
         const int nx = enemy->tile_x + kDirDx[d];
         const int ny = enemy->tile_y + kDirDy[d];
-        if (!tile_walkable_for_enemy_with_occupancy(gs, occupancy, moving_block_occupancy, nx, ny)) {
+        if (!tile_walkable_for_enemy_with_occupancy(gs, occupancy, moving_block_occupancy, enemy->type, nx, ny)) {
             continue;
         }
         valid[valid_count++] = d;
@@ -4400,6 +4795,18 @@ static Direction choose_enemy_direction(
 
     if (valid_count == 0) {
         return DIR_NONE;
+    }
+
+    if (enemy->type == ENEMY_TYPE_GHOST) {
+        return choose_ghost_direction(gs, enemy, valid, valid_count);
+    }
+
+    if (enemy->type == ENEMY_TYPE_HUNTER) {
+        return choose_hunter_direction(gs, enemy, valid, valid_count);
+    }
+
+    if (enemy->type == ENEMY_TYPE_WANDERER) {
+        return choose_wanderer_direction(gs, enemy, valid, valid_count);
     }
 
     const Direction reverse = opposite_direction(enemy->direction);
@@ -4417,9 +4824,6 @@ static Direction choose_enemy_direction(
     }
 
     int chase_percent = gs->round_config.aggression_percent;
-    if (enemy->type == ENEMY_TYPE_WANDERER) {
-        chase_percent = gs->round_config.aggression_percent / 3;
-    }
 
 #if defined(ICEPANIC_AMIGA_SMALL_STACK)
     const int chase_roll = (int)(rng_next(gs) & 0xFFu);
@@ -4455,21 +4859,18 @@ static void update_enemies(GameState *gs) {
     ICEPANIC_SCRATCH uint32_t enemy_occupancy[GAME_GRID_HEIGHT];
     ICEPANIC_SCRATCH uint32_t moving_block_occupancy[GAME_GRID_HEIGHT];
     uint16_t enemy_mask;
-#if defined(ICEPANIC_AMIGA_SMALL_STACK)
-    if (gs->alive_enemy_count <= 0) {
+    if (!any_live_enemy_active(gs)) {
         return;
     }
-#endif
     build_enemy_occupancy(gs, enemy_occupancy);
     build_moving_block_occupancy(gs, moving_block_occupancy);
     enemy_mask = live_enemy_mask_for_game(gs);
 
     for (int i = 0; enemy_mask != 0u && i < gs->enemy_count; ++i, enemy_mask >>= 1) {
-        uint16_t bit = slot_bit(i);
         Enemy *enemy = &gs->enemies[i];
         if ((enemy_mask & 1u) == 0u || !enemy->alive) {
             if (!enemy->alive) {
-                gs->alive_enemy_mask &= (uint16_t)~bit;
+                clear_enemy_alive_bit(gs, i);
             }
             continue;
         }
@@ -4479,7 +4880,7 @@ static void update_enemies(GameState *gs) {
             if (enemy->spawn_ticks == 0) {
                 enemy->state = ENEMY_ROAMING;
                 enemy->decision_cooldown_ticks = 0;
-                if (gs->mines[enemy->tile_y][enemy->tile_x]) {
+                if (enemy_can_trigger_mine(enemy) && gs->mines[enemy->tile_y][enemy->tile_x]) {
                     trigger_mine_explosion(gs, enemy->tile_x, enemy->tile_y);
                     build_enemy_occupancy(gs, enemy_occupancy);
                 }
@@ -4500,7 +4901,7 @@ static void update_enemies(GameState *gs) {
                     enemy->tile_y);
             }
             if (enemy->move_remaining_fp == 0) {
-                if (gs->mines[enemy->tile_y][enemy->tile_x]) {
+                if (enemy_can_trigger_mine(enemy) && gs->mines[enemy->tile_y][enemy->tile_x]) {
                     trigger_mine_explosion(gs, enemy->tile_x, enemy->tile_y);
                     build_enemy_occupancy(gs, enemy_occupancy);
                     if (!enemy->alive) {
@@ -4550,11 +4951,9 @@ static void resolve_player_enemy_collision(GameState *gs) {
     if (round_clear_pending_active(gs)) {
         return;
     }
-#if defined(ICEPANIC_AMIGA_SMALL_STACK)
-    if (gs->alive_enemy_count <= 0) {
+    if (!any_live_enemy_active(gs)) {
         return;
     }
-#endif
 
     {
     uint16_t enemy_mask = live_enemy_mask_for_game(gs);
@@ -4564,14 +4963,7 @@ static void resolve_player_enemy_collision(GameState *gs) {
             continue;
         }
 
-        if (enemy->tile_x == gs->player.tile_x && enemy->tile_y == gs->player.tile_y) {
-            kill_player(gs);
-            return;
-        }
-
-        const GamePixelFp dx = abs_fp(enemy->pixel_fp_x - gs->player.pixel_fp_x);
-        const GamePixelFp dy = abs_fp(enemy->pixel_fp_y - gs->player.pixel_fp_y);
-        if (dx < PLAYER_ENEMY_CONTACT_THRESHOLD_FP && dy < PLAYER_ENEMY_CONTACT_THRESHOLD_FP) {
+        if (player_touches_enemy(&gs->player, enemy)) {
             kill_player(gs);
             return;
         }
@@ -5508,6 +5900,21 @@ void game_start_round(GameState *gs, int round_index) {
     if (enemy_spawn_count < gs->enemy_count) {
         gs->enemy_count = enemy_spawn_count;
     }
+    {
+        const int special_slots = (gs->enemy_count > 1) ? (gs->enemy_count - 1) : 0;
+        gs->round_config.enemy_ghost_count = clampi(
+            gs->round_config.enemy_ghost_count,
+            0,
+            min_int(1, special_slots));
+        gs->round_config.enemy_hunter_count = clampi(
+            gs->round_config.enemy_hunter_count,
+            0,
+            special_slots - gs->round_config.enemy_ghost_count);
+        gs->round_config.enemy_wanderer_count = clampi(
+            gs->round_config.enemy_wanderer_count,
+            0,
+            special_slots - gs->round_config.enemy_ghost_count - gs->round_config.enemy_hunter_count);
+    }
 
     for (int y = 1; y < GAME_GRID_HEIGHT - 1; ++y) {
         for (int x = 1; x < GAME_GRID_WIDTH - 1; ++x) {
@@ -5521,10 +5928,13 @@ void game_start_round(GameState *gs, int round_index) {
         enemy_spawn_ticks_base = min_int(enemy_spawn_ticks_base, 52);
     }
 
-    gs->alive_enemy_count = gs->enemy_count;
+    gs->alive_enemy_count = 0;
     gs->alive_enemy_mask = 0;
     for (int i = 0; i < gs->enemy_count; ++i) {
         const int spawn_idx = i;
+        const int ghost_start = gs->enemy_count - gs->round_config.enemy_ghost_count;
+        const int hunter_start = ghost_start - gs->round_config.enemy_hunter_count;
+        const int wanderer_start = hunter_start - gs->round_config.enemy_wanderer_count;
         Enemy *enemy = &gs->enemies[i];
         enemy->tile_x = enemy_spawns[spawn_idx][0];
         enemy->tile_y = enemy_spawns[spawn_idx][1];
@@ -5532,7 +5942,19 @@ void game_start_round(GameState *gs, int round_index) {
         enemy->pixel_fp_y = tile_to_fp(enemy->tile_y);
         enemy->direction = (Direction)(DIR_UP + (Direction)(rng_next(gs) % 4u));
         enemy->state = ENEMY_SPAWNING;
-        if (i >= (gs->enemy_count - gs->round_config.enemy_wanderer_count)) {
+        if (i >= ghost_start) {
+            enemy->type = ENEMY_TYPE_GHOST;
+            enemy->speed_fp = clampi(
+                gs->round_config.enemy_speed_fp + map_pressure_speed_bonus_fp - (FP_ONE / 2),
+                FP_ONE / 2,
+                (7 * FP_ONE) / 4);
+        } else if (i >= hunter_start) {
+            enemy->type = ENEMY_TYPE_HUNTER;
+            enemy->speed_fp = clampi(
+                gs->round_config.enemy_speed_fp + map_pressure_speed_bonus_fp + (FP_ONE / 4),
+                FP_ONE,
+                5 * FP_ONE);
+        } else if (i >= wanderer_start) {
             enemy->type = ENEMY_TYPE_WANDERER;
             enemy->speed_fp = clampi(
                 gs->round_config.enemy_speed_fp + map_pressure_speed_bonus_fp - (FP_ONE / 2),
@@ -5551,6 +5973,9 @@ void game_start_round(GameState *gs, int round_index) {
         enemy->decision_cooldown_ticks = 0;
         enemy->alive = true;
         gs->alive_enemy_mask |= slot_bit(i);
+        if (enemy_is_killable(enemy)) {
+            ++gs->alive_enemy_count;
+        }
     }
 
     reset_player_runtime_state(gs, gs->player_spawn_x, gs->player_spawn_y);

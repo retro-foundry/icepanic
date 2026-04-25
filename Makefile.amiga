@@ -6,7 +6,7 @@ XDFTOOL ?= xdftool
 TARGET_CONFIG ?= +kick13s
 ASSET_TARGET_CONFIG ?= +kick13
 OBJDIR ?= build/amiga
-ICEPANIC_VERSION ?= 0.9.0-beta.1
+ICEPANIC_VERSION ?= 0.9.0-beta.2
 ICEPANIC_PLATFORM ?= amiga-ecs-pal
 RELEASE_BASENAME ?= icepanic-v$(ICEPANIC_VERSION)-$(ICEPANIC_PLATFORM)
 OUT ?= $(OBJDIR)/$(RELEASE_BASENAME)
@@ -71,8 +71,8 @@ $(OBJDIR)/main.o: src/platform_amiga/main.c src/platform_amiga/amiga_assets.h sr
 $(OUT): $(OBJS)
 	$(VC) $(TARGET_CONFIG) $(OBJS) -o $@
 
-$(ADF): $(OUT) tools/build_amiga_adf.py | $(OBJDIR)
-	$(PYTHON) tools/build_amiga_adf.py --exe $(OUT) --output $(ADF) --xdftool $(XDFTOOL)
+$(ADF): $(OUT) tools/build_amiga_adf.py ICEPANIC.NFO | $(OBJDIR)
+	$(PYTHON) tools/build_amiga_adf.py --exe $(OUT) --output $(ADF) --xdftool $(XDFTOOL) --nfo ICEPANIC.NFO
 
 clean:
 	$(PYTHON) -c "import shutil; shutil.rmtree(r'$(OBJDIR)', ignore_errors=True)"

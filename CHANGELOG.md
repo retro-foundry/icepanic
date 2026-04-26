@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.9.0-beta.4
+
+Fourth Amiga ECS beta release candidate.
+
+- Fixed a timeout edge case where respawn invulnerability could leave the game stuck at zero time.
+- Regenerated the current map when the player dies because time runs out.
+- Added PAL copper presentation polish: icy reflection, slow reflection wave, and gameplay scanline sparkles.
+
 ## v0.9.0-beta.3
 
 Third Amiga ECS beta release candidate.

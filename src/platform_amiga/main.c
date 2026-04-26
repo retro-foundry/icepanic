@@ -56,6 +56,12 @@
 #ifndef AMIGA_SMOOTH_VSYNC
 #define AMIGA_SMOOTH_VSYNC 1
 #endif
+#ifndef AMIGA_PAL_REFLECTION
+#define AMIGA_PAL_REFLECTION 1
+#endif
+#ifndef AMIGA_COPPER_GAMEPLAY_SPARKLE
+#define AMIGA_COPPER_GAMEPLAY_SPARKLE 1
+#endif
 #if defined(AMIGA_PROFILE_ON)
 #undef AMIGA_PROFILE
 #define AMIGA_PROFILE 1
@@ -139,6 +145,17 @@
 #define ICE_MEMF_CLEAR 0x00010000UL
 #define DYNAMIC_DIRTY_SLOTS 64
 #define DISPLAY_DMA_BITS (DMAF_SETCLR | DMAF_MASTER | DMAF_RASTER | DMAF_COPPER | DMAF_BLITTER)
+#define GAME_DIWSTOP 0xF4C1
+#define PAL_FULL_DIWSTOP 0x2CC1
+#define PAL_REFLECTION_START_LINE 0xF4
+#define PAL_REFLECTION_LINES 56
+#define PAL_REFLECTION_SOURCE_STEP 2
+#define PAL_REFLECTION_BPLMOD ((UWORD)(0x10000UL - (((ULONG)ROW_STRIDE_BYTES * PAL_REFLECTION_SOURCE_STEP) + ROW_BYTES)))
+#define COPPER_DISPLAY_TOP_LINE 0x2C
+#define COPPER_GAMEPLAY_SPARKLE_COUNT 7
+#define COPPER_GAMEPLAY_SPARKLE_TOP_Y 10
+#define COPPER_GAMEPLAY_SPARKLE_STEP_Y 25
+#define COPPER_GAMEPLAY_SPARKLE_RESTORE_GAP 2
 #define RENDER_FRAME_SCREEN 0x01u
 #define RENDER_FRAME_SPRITES 0x02u
 #define HIGH_SCORE_COUNT 5
@@ -177,6 +194,19 @@ typedef struct CopperState {
     ULONG bytes;
     UWORD *bpl_hi[DEPTH];
     UWORD *bpl_lo[DEPTH];
+    UWORD *reflect_bpl_hi[DEPTH];
+    UWORD *reflect_bpl_lo[DEPTH];
+    UWORD *reflect_bplcon1[PAL_REFLECTION_LINES];
+    UWORD *sparkle_wait[COPPER_GAMEPLAY_SPARKLE_COUNT];
+    UWORD *sparkle_color6[COPPER_GAMEPLAY_SPARKLE_COUNT];
+    UWORD *sparkle_color7[COPPER_GAMEPLAY_SPARKLE_COUNT];
+    UWORD *sparkle_color8[COPPER_GAMEPLAY_SPARKLE_COUNT];
+    UWORD *sparkle_color9[COPPER_GAMEPLAY_SPARKLE_COUNT];
+    UWORD *sparkle_restore_wait[COPPER_GAMEPLAY_SPARKLE_COUNT];
+    UWORD *sparkle_restore_color6[COPPER_GAMEPLAY_SPARKLE_COUNT];
+    UWORD *sparkle_restore_color7[COPPER_GAMEPLAY_SPARKLE_COUNT];
+    UWORD *sparkle_restore_color8[COPPER_GAMEPLAY_SPARKLE_COUNT];
+    UWORD *sparkle_restore_color9[COPPER_GAMEPLAY_SPARKLE_COUNT];
     UWORD *spr_hi[HW_SPRITE_COUNT];
     UWORD *spr_lo[HW_SPRITE_COUNT];
 } CopperState;
@@ -5286,11 +5316,129 @@ static void apply_menu_input_repeat(
     *repeat_ticks = 4;
 }
 
+static UWORD icy_reflection_color(UWORD color) {
+    WORD r = (WORD)((color >> 8) & 15u);
+    WORD g = (WORD)((color >> 4) & 15u);
+    WORD b = (WORD)(color & 15u);
+    WORD luma;
+    WORD rr;
+    WORD gg;
+    WORD bb;
+
+    if (color == 0) {
+        return 0x001;
+    }
+
+    luma = (WORD)((r + g + b) / 3);
+    rr = (WORD)(luma >> 3);
+    gg = (WORD)((luma + b) >> 3);
+    bb = (WORD)((luma + b + 4) >> 2);
+    if (gg > 15) gg = 15;
+    if (bb > 15) bb = 15;
+    return (UWORD)((rr << 8) | (gg << 4) | bb);
+}
+
+static UWORD reflection_scroll_for_line(WORD line, ULONG tick) {
+    static const UBYTE wave[64] = {
+        0, 0, 0, 1, 1, 1, 2, 2,
+        2, 3, 3, 3, 4, 4, 4, 4,
+        4, 4, 4, 3, 3, 3, 2, 2,
+        2, 1, 1, 1, 0, 0, 0, 0,
+        0, 0, 1, 1, 1, 2, 2, 2,
+        3, 3, 3, 4, 4, 4, 3, 3,
+        3, 2, 2, 2, 1, 1, 1, 0,
+        0, 0, 0, 1, 1, 1, 0, 0
+    };
+    UBYTE shift = wave[(WORD)(((tick >> 2) + (ULONG)(line / 3)) & 63UL)];
+    return (UWORD)(shift | (shift << 4));
+}
+
+static void patch_copper_reflection_wave(CopperState *cs, ULONG tick) {
+#if AMIGA_PAL_REFLECTION
+    WORD i;
+    if (!cs) {
+        return;
+    }
+    for (i = 0; i < PAL_REFLECTION_LINES; ++i) {
+        if (cs->reflect_bplcon1[i]) {
+            *(cs->reflect_bplcon1[i]) = reflection_scroll_for_line(i, tick);
+        }
+    }
+#else
+    (void)cs;
+    (void)tick;
+#endif
+}
+
+static UWORD gameplay_sparkle_y(WORD index, ULONG tick) {
+    static const UBYTE wave[64] = {
+        0, 0, 1, 1, 2, 3, 4, 5,
+        6, 7, 8, 9, 10, 11, 12, 12,
+        13, 13, 12, 12, 11, 10, 9, 8,
+        7, 6, 5, 4, 3, 2, 1, 0,
+        0, 1, 2, 3, 4, 5, 6, 7,
+        8, 9, 10, 11, 12, 13, 13, 12,
+        11, 10, 9, 8, 7, 6, 5, 4,
+        3, 2, 1, 0, 0, 0, 1, 1
+    };
+    ULONG phase = (tick >> 2) + (ULONG)(index * 11);
+    return (UWORD)(COPPER_GAMEPLAY_SPARKLE_TOP_Y +
+                   (index * COPPER_GAMEPLAY_SPARKLE_STEP_Y) +
+                   wave[phase & 63UL]);
+}
+
+static void patch_copper_gameplay_sparkle(CopperState *cs, ULONG tick) {
+#if AMIGA_COPPER_GAMEPLAY_SPARKLE
+    WORD i;
+    if (!cs) {
+        return;
+    }
+    for (i = 0; i < COPPER_GAMEPLAY_SPARKLE_COUNT; ++i) {
+        UWORD y = gameplay_sparkle_y(i, tick);
+        UWORD line = (UWORD)(COPPER_DISPLAY_TOP_LINE + y);
+        UWORD restore_line = (UWORD)(line + COPPER_GAMEPLAY_SPARKLE_RESTORE_GAP);
+        if (cs->sparkle_wait[i]) {
+            *(cs->sparkle_wait[i]) = (UWORD)(((line & 0xFFu) << 8) | 0x07);
+        }
+        if (cs->sparkle_restore_wait[i]) {
+            *(cs->sparkle_restore_wait[i]) = (UWORD)(((restore_line & 0xFFu) << 8) | 0x07);
+        }
+        if (cs->sparkle_color6[i]) {
+            *(cs->sparkle_color6[i]) = (UWORD)((((tick >> 3) + (ULONG)i) & 1UL) ? 0x8DF : 0x9EF);
+        }
+        if (cs->sparkle_color7[i]) {
+            *(cs->sparkle_color7[i]) = (UWORD)((((tick >> 2) + (ULONG)i) & 1UL) ? 0xAFF : 0xCFF);
+        }
+        if (cs->sparkle_color8[i]) {
+            *(cs->sparkle_color8[i]) = (UWORD)((((tick >> 3) + (ULONG)i) & 1UL) ? 0xEFF : 0xFFF);
+        }
+        if (cs->sparkle_color9[i]) {
+            *(cs->sparkle_color9[i]) = (UWORD)((((tick >> 2) + (ULONG)i) & 1UL) ? 0xDFF : 0xFFF);
+        }
+        if (cs->sparkle_restore_color6[i]) {
+            *(cs->sparkle_restore_color6[i]) = g_amiga_palette[6];
+        }
+        if (cs->sparkle_restore_color7[i]) {
+            *(cs->sparkle_restore_color7[i]) = g_amiga_palette[7];
+        }
+        if (cs->sparkle_restore_color8[i]) {
+            *(cs->sparkle_restore_color8[i]) = g_amiga_palette[8];
+        }
+        if (cs->sparkle_restore_color9[i]) {
+            *(cs->sparkle_restore_color9[i]) = g_amiga_palette[9];
+        }
+    }
+#else
+    (void)cs;
+    (void)tick;
+#endif
+}
+
 static BOOL build_copper_list(CopperState *cs) {
     UWORD *p;
     UWORD *cop;
     WORD i;
-    ULONG words = 192;
+    ULONG words = 900;
     cop = (UWORD *)AllocMem(words * sizeof(UWORD), ICE_MEMF_CHIP | ICE_MEMF_CLEAR);
     if (!cop) {
         return FALSE;
@@ -5300,7 +5448,12 @@ static BOOL build_copper_list(CopperState *cs) {
     p = cop;
 
     *p++ = DIWSTRT; *p++ = 0x2C81;
-    *p++ = DIWSTOP; *p++ = 0xF4C1;
+    *p++ = DIWSTOP;
+#if AMIGA_PAL_REFLECTION
+    *p++ = PAL_FULL_DIWSTOP;
+#else
+    *p++ = GAME_DIWSTOP;
+#endif
     *p++ = DDFSTRT; *p++ = 0x0038;
     *p++ = DDFSTOP; *p++ = 0x00D0;
     *p++ = BPLCON0; *p++ = (UWORD)(0x0200 | (DEPTH << 12));
@@ -5341,12 +5494,85 @@ static BOOL build_copper_list(CopperState *cs) {
 #endif
     }
 
+#if AMIGA_COPPER_GAMEPLAY_SPARKLE
+    for (i = 0; i < COPPER_GAMEPLAY_SPARKLE_COUNT; ++i) {
+        UWORD y = (UWORD)(COPPER_GAMEPLAY_SPARKLE_TOP_Y + (i * COPPER_GAMEPLAY_SPARKLE_STEP_Y));
+        UWORD line = (UWORD)(COPPER_DISPLAY_TOP_LINE + y);
+        *p++ = (UWORD)(((line & 0xFFu) << 8) | 0x07);
+        cs->sparkle_wait[i] = p - 1;
+        *p++ = 0xFFFE;
+        *p++ = COLOR_REG(6);
+        cs->sparkle_color6[i] = p;
+        *p++ = 0x9EF;
+        *p++ = COLOR_REG(7);
+        cs->sparkle_color7[i] = p;
+        *p++ = 0xBFF;
+        *p++ = COLOR_REG(8);
+        cs->sparkle_color8[i] = p;
+        *p++ = 0xFFF;
+        *p++ = COLOR_REG(9);
+        cs->sparkle_color9[i] = p;
+        *p++ = 0xEFF;
+
+        line = (UWORD)(line + COPPER_GAMEPLAY_SPARKLE_RESTORE_GAP);
+        *p++ = (UWORD)(((line & 0xFFu) << 8) | 0x07);
+        cs->sparkle_restore_wait[i] = p - 1;
+        *p++ = 0xFFFE;
+        *p++ = COLOR_REG(6);
+        cs->sparkle_restore_color6[i] = p;
+        *p++ = g_amiga_palette[6];
+        *p++ = COLOR_REG(7);
+        cs->sparkle_restore_color7[i] = p;
+        *p++ = g_amiga_palette[7];
+        *p++ = COLOR_REG(8);
+        cs->sparkle_restore_color8[i] = p;
+        *p++ = g_amiga_palette[8];
+        *p++ = COLOR_REG(9);
+        cs->sparkle_restore_color9[i] = p;
+        *p++ = g_amiga_palette[9];
+    }
+#endif
+
+#if AMIGA_PAL_REFLECTION
+    *p++ = (UWORD)((PAL_REFLECTION_START_LINE << 8) | 0x07);
+    *p++ = 0xFFFE;
+    *p++ = BPLCON1;
+    cs->reflect_bplcon1[0] = p;
+    *p++ = 0x0000;
+    *p++ = BPL1MOD; *p++ = PAL_REFLECTION_BPLMOD;
+    *p++ = BPL2MOD; *p++ = PAL_REFLECTION_BPLMOD;
+    for (i = 0; i < DEPTH; ++i) {
+        *p++ = (UWORD)(BPL1PTH + (i * 4));
+        cs->reflect_bpl_hi[i] = p;
+        *p++ = 0;
+        *p++ = (UWORD)(BPL1PTL + (i * 4));
+        cs->reflect_bpl_lo[i] = p;
+        *p++ = 0;
+    }
+    for (i = 0; i < AMIGA_ASSET_PALETTE_COUNT; ++i) {
+        *p++ = (UWORD)COLOR_REG(i);
+#if AMIGA_USE_HW_SPRITES
+        *p++ = icy_reflection_color((i == 29) ? g_amiga_palette[2] : g_amiga_palette[i]);
+#else
+        *p++ = icy_reflection_color(g_amiga_palette[i]);
+#endif
+    }
+    for (i = 1; i < PAL_REFLECTION_LINES; ++i) {
+        UWORD line = (UWORD)(PAL_REFLECTION_START_LINE + i);
+        *p++ = (UWORD)(((line & 0xFFu) << 8) | 0x07);
+        *p++ = 0xFFFE;
+        *p++ = BPLCON1;
+        cs->reflect_bplcon1[i] = p;
+        *p++ = 0x0000;
+    }
+#else
     *p++ = (UWORD)((0xF4 << 8) | 0x07);
     *p++ = 0xFFFE;
     *p++ = BPLCON0;
     *p++ = 0x0000;
     *p++ = COLOR00;
     *p++ = 0x0000;
+#endif
     *p++ = 0xFFFF;
     *p++ = 0xFFFE;
 
@@ -5359,6 +5585,11 @@ static void patch_copper_bplptrs(CopperState *cs, UBYTE *screen) {
         ULONG addr = (ULONG)screen + ((ULONG)i * ROW_BYTES);
         *(cs->bpl_hi[i]) = (UWORD)(addr >> 16);
         *(cs->bpl_lo[i]) = (UWORD)(addr & 0xFFFF);
+        if (cs->reflect_bpl_hi[i] && cs->reflect_bpl_lo[i]) {
+            addr = (ULONG)screen + ((ULONG)(SCREEN_H - 1) * ROW_STRIDE_BYTES) + ((ULONG)i * ROW_BYTES);
+            *(cs->reflect_bpl_hi[i]) = (UWORD)(addr >> 16);
+            *(cs->reflect_bpl_lo[i]) = (UWORD)(addr & 0xFFFF);
+        }
     }
 }
 
@@ -5833,6 +6064,8 @@ int main(void) {
     last_rendered_phase = rs->phase;
     wait_blitter();
     patch_copper_bplptrs(&app->copper, app->screen[0]);
+    patch_copper_reflection_wave(&app->copper, g_ui_anim_tick);
+    patch_copper_gameplay_sparkle(&app->copper, g_ui_anim_tick);
 #if AMIGA_HW_SPRITES_ENABLED
     patch_copper_spriteptrs(&app->copper, app->hw_sprite_bank[0]);
 #endif
@@ -5841,6 +6074,8 @@ int main(void) {
 
     while (TRUE) {
         frame_sync_begin(&sync);
+        patch_copper_reflection_wave(&app->copper, g_ui_anim_tick);
+        patch_copper_gameplay_sparkle(&app->copper, g_ui_anim_tick);
         InputState input = read_input(&last_dirs, &last_fire);
         apply_menu_input_repeat(game, &input, &menu_repeat_dir, &menu_repeat_ticks);
         if (quit_combo_down()) {

@@ -326,6 +326,7 @@ typedef struct GameState {
     bool start_was_down;
     bool fire_was_down;
     bool fire_confirm_armed;
+    bool player_death_from_timeout;
     bool start_title_pending;
 
     uint32_t rng_state;

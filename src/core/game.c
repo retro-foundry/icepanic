@@ -3865,7 +3865,7 @@ static void find_safe_respawn_tile(const GameState *gs, int *out_x, int *out_y) 
     *out_y = sy;
 }
 
-static void kill_player(GameState *gs) {
+static void kill_player_internal(GameState *gs, bool ignore_respawn_invuln, bool from_timeout) {
     if (!gs->player.alive) {
         return;
     }
@@ -3875,7 +3875,7 @@ static void kill_player(GameState *gs) {
     if (round_clear_pending_active(gs)) {
         return;
     }
-    if (gs->player.respawn_invuln_ticks > 0) {
+    if (!ignore_respawn_invuln && gs->player.respawn_invuln_ticks > 0) {
         return;
     }
 
@@ -3884,7 +3884,16 @@ static void kill_player(GameState *gs) {
     gs->player.move_remaining_fp = 0;
     gs->phase = GAME_PHASE_PLAYER_DYING;
     gs->phase_timer_ticks = PLAYER_DYING_TICKS;
+    gs->player_death_from_timeout = from_timeout;
     emit_event(gs, GAME_EVENT_PLAYER_DIED);
+}
+
+static void kill_player(GameState *gs) {
+    kill_player_internal(gs, false, false);
+}
+
+static void kill_player_for_timeout(GameState *gs) {
+    kill_player_internal(gs, true, true);
 }
 
 static ImpactFxStyle crush_style_for_block(BlockType type) {
@@ -5117,6 +5126,9 @@ static void update_meta_upgrade_choice(GameState *gs, const InputState *in, bool
 }
 
 static void handle_player_death_transition(GameState *gs) {
+    const bool timeout_death = gs->player_death_from_timeout;
+    gs->player_death_from_timeout = false;
+
     --gs->lives;
     if (gs->lives <= 0) {
         gs->phase = GAME_PHASE_GAME_OVER;
@@ -5126,6 +5138,15 @@ static void handle_player_death_transition(GameState *gs) {
         return;
     }
     emit_event(gs, GAME_EVENT_LIFE_LOST);
+
+    if (timeout_death) {
+        const int round = gs->round;
+        game_start_round(gs, round);
+        gs->phase_timer_ticks = RESPAWN_INTRO_TICKS;
+        gs->start_title_pending = false;
+        emit_event(gs, GAME_EVENT_LIFE_LOST);
+        return;
+    }
 
     int spawn_x = gs->player_spawn_x;
     int spawn_y = gs->player_spawn_y;
@@ -5982,6 +6003,7 @@ void game_start_round(GameState *gs, int round_index) {
     gs->phase = GAME_PHASE_ROUND_INTRO;
     gs->phase_timer_ticks = ROUND_INTRO_TICKS;
     gs->start_title_pending = (gs->round == 1 && gs->score == 0u);
+    gs->player_death_from_timeout = false;
     reset_fire_confirm_gate(gs);
     emit_event(gs, GAME_EVENT_ROUND_START);
     if (gs->stage_modifier != STAGE_MOD_NONE) {
@@ -6120,7 +6142,7 @@ void game_step(GameState *gs, const InputState *in) {
                 update_bonus_item_timer(gs);
             }
             if (!clear_pending && gs->round_time_ticks <= 0) {
-                kill_player(gs);
+                kill_player_for_timeout(gs);
                 update_score_popups(gs);
                 break;
             }

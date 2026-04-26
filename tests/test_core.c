@@ -1084,6 +1084,43 @@ static bool test_round_clear_pending_stops_timer_and_blocks_player_death(void) {
     return true;
 }
 
+static bool test_timeout_death_bypasses_respawn_invulnerability(void) {
+    const char *name = "timeout_death_bypasses_respawn_invulnerability";
+    GameState gs;
+    init_empty_playing_arena(&gs);
+
+    gs.lives = 2;
+    gs.round_time_ticks = 0;
+    gs.player.respawn_invuln_ticks = 20;
+    gs.items[5][5] = ITEM_GEM;
+    gs.active_item_x[0] = 5;
+    gs.active_item_y[0] = 5;
+    gs.active_item_count = 1;
+    gs.mines[6][6] = true;
+    gs.active_mine_x[0] = 6;
+    gs.active_mine_y[0] = 6;
+    gs.active_mine_count = 1;
+
+    {
+        InputState none = {0};
+        game_step(&gs, &none);
+    }
+
+    REQUIRE(name, gs.phase == GAME_PHASE_PLAYER_DYING, "timeout should enter dying phase even while respawn-invulnerable");
+    REQUIRE(name, !gs.player.alive, "timeout should mark player dead");
+    REQUIRE(name, (game_consume_events(&gs) & GAME_EVENT_PLAYER_DIED) != 0u, "timeout should emit player death event");
+
+    step_until_phase(&gs, GAME_PHASE_ROUND_INTRO, 200);
+    REQUIRE(name, gs.phase == GAME_PHASE_ROUND_INTRO, "timeout life loss should advance to respawn intro");
+    REQUIRE(name, gs.lives == 1, "timeout should consume one life");
+    REQUIRE(name, gs.round_time_ticks == gs.round_config.round_time_ticks, "timeout respawn should refresh the round timer");
+    REQUIRE(name, gs.round_time_ticks > 0, "timeout respawn should not leave the timer at zero");
+    REQUIRE(name, !gs.start_title_pending, "timeout respawn should not re-enter the title gate");
+    REQUIRE(name, gs.items[5][5] == ITEM_NONE && gs.active_item_count == 0, "timeout respawn should regenerate/clear item layer");
+    REQUIRE(name, !gs.mines[6][6] && gs.active_mine_count == 0, "timeout respawn should regenerate/clear mines");
+    return true;
+}
+
 static bool test_perk_choice_applies_selected_perk(void) {
     const char *name = "perk_choice_applies_selected_perk";
     GameState gs;
@@ -3248,6 +3285,7 @@ int main(void) {
     failed += test_round_clear_does_not_require_points() ? 0 : 1;
     failed += test_round_clear_tracks_time_bonus_score() ? 0 : 1;
     failed += test_round_clear_pending_stops_timer_and_blocks_player_death() ? 0 : 1;
+    failed += test_timeout_death_bypasses_respawn_invulnerability() ? 0 : 1;
     failed += test_perk_choice_applies_selected_perk() ? 0 : 1;
     failed += test_fire_release_from_round_clear_does_not_skip_perk_choice() ? 0 : 1;
     failed += test_perk_draft_anti_repeat_has_new_offer() ? 0 : 1;

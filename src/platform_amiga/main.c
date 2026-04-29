@@ -8,6 +8,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 #include <string.h>
 
 #include <exec/memory.h>
@@ -24,7 +25,8 @@
 #include <proto/graphics.h>
 #include <proto/intuition.h>
 
-#define CREGS ((volatile struct Custom *)0xDFF000)
+#define CUSTOM_CHIP_BASE 0xDFF000UL
+#define CREGS ((volatile struct Custom *)CUSTOM_CHIP_BASE)
 
 #define TASK_PRIORITY 20
 
@@ -37,7 +39,7 @@
 #define AMIGA_USE_HW_SPRITES 0
 #endif
 #ifndef AMIGA_USE_HW_SPARKLES
-#define AMIGA_USE_HW_SPARKLES 1
+#define AMIGA_USE_HW_SPARKLES 0
 #endif
 #ifndef AMIGA_USE_TITLE_HW_SPARKLES
 #define AMIGA_USE_TITLE_HW_SPARKLES AMIGA_USE_HW_SPARKLES
@@ -53,6 +55,18 @@
 #ifndef AMIGA_RENDER_DIVISOR
 #define AMIGA_RENDER_DIVISOR 1
 #endif
+#ifndef AMIGA_DISABLE_BLITTER_TEST
+#define AMIGA_DISABLE_BLITTER_TEST 0
+#endif
+#ifndef AMIGA_SINGLE_BUFFER_TEST
+#define AMIGA_SINGLE_BUFFER_TEST 0
+#endif
+#ifndef AMIGA_PLAYER_BOB_ONLY_TEST
+#define AMIGA_PLAYER_BOB_ONLY_TEST 1
+#endif
+#ifndef AMIGA_FORCE_BOB_PROBE_TEST
+#define AMIGA_FORCE_BOB_PROBE_TEST 1
+#endif
 #ifndef AMIGA_SMOOTH_VSYNC
 #define AMIGA_SMOOTH_VSYNC 1
 #endif
@@ -61,6 +75,9 @@
 #endif
 #ifndef AMIGA_COPPER_GAMEPLAY_SPARKLE
 #define AMIGA_COPPER_GAMEPLAY_SPARKLE 1
+#endif
+#ifndef AMIGA_CRACKTRO_ENABLED
+#define AMIGA_CRACKTRO_ENABLED 0
 #endif
 #if defined(AMIGA_PROFILE_ON)
 #undef AMIGA_PROFILE
@@ -77,6 +94,8 @@
 #define ROW_BYTES (SCREEN_W / 8)
 #define ROW_STRIDE_BYTES (ROW_BYTES * DEPTH)
 #define SCREEN_BYTES ((ULONG)ROW_STRIDE_BYTES * SCREEN_H)
+#define SCREEN_BANK_BYTES 65536UL
+#define SCREEN_POOL_BYTES ((SCREEN_BANK_BYTES * 3UL) + SCREEN_BYTES)
 #define GAMEPLAY_H (GAME_GRID_HEIGHT * GAME_TILE_SIZE)
 
 #define TILE_CHIP_BYTES ((ULONG)AMIGA_ASSET_SPRITE_COUNT * AMIGA_ASSET_TILE_BYTES)
@@ -100,27 +119,31 @@
 #define PRA_FIR0_BIT (1 << 6)
 #define PRA_FIR1_BIT (1 << 7)
 
-#define COPJMP1 0x088
-#define DIWSTRT 0x08E
-#define DIWSTOP 0x090
-#define DDFSTRT 0x092
-#define DDFSTOP 0x094
-#define BPL1PTH 0x0E0
-#define BPL1PTL 0x0E2
-#define BPLCON0 0x100
-#define BPLCON1 0x102
-#define BPLCON2 0x104
-#define BPL1MOD 0x108
-#define BPL2MOD 0x10A
-#define SPR0PTH 0x120
-#define SPR0PTL 0x122
-#define COLOR00 0x180
-#define COLOR_REG(n) (COLOR00 + ((n) << 1))
+#define CUSTOM_REG(member) ((UWORD)offsetof(struct Custom, member))
+#define CUSTOM_PTR_HI(base, index) ((UWORD)(CUSTOM_REG(base) + ((index) * (int)sizeof(APTR))))
+#define CUSTOM_PTR_LO(base, index) ((UWORD)(CUSTOM_PTR_HI(base, index) + (int)sizeof(UWORD)))
+#define COPJMP1 CUSTOM_REG(copjmp1)
+#define DIWSTRT CUSTOM_REG(diwstrt)
+#define DIWSTOP CUSTOM_REG(diwstop)
+#define DDFSTRT CUSTOM_REG(ddfstrt)
+#define DDFSTOP CUSTOM_REG(ddfstop)
+#define BPL1PTH CUSTOM_PTR_HI(bplpt, 0)
+#define BPL1PTL CUSTOM_PTR_LO(bplpt, 0)
+#define BPLCON0 CUSTOM_REG(bplcon0)
+#define BPLCON1 CUSTOM_REG(bplcon1)
+#define BPLCON2 CUSTOM_REG(bplcon2)
+#define BPL1MOD CUSTOM_REG(bpl1mod)
+#define BPL2MOD CUSTOM_REG(bpl2mod)
+#define SPR0PTH CUSTOM_PTR_HI(sprpt, 0)
+#define SPR0PTL CUSTOM_PTR_LO(sprpt, 0)
+#define COLOR00 CUSTOM_REG(color)
+#define COLOR_REG(n) ((UWORD)(CUSTOM_REG(color) + ((n) * (int)sizeof(UWORD))))
 
 #define BLT_USEA 0x0800
 #define BLT_USEB 0x0400
 #define BLT_USEC 0x0200
 #define BLT_USED 0x0100
+#define BLT_MINTERM_COPY_A 0x00F0
 #define BLT_MINTERM_COPY_B 0x00CC
 #define BLT_MINTERM_COOKIE 0x00CA
 #ifndef DMAF_BLTDONE
@@ -145,7 +168,10 @@
 #define ICE_MEMF_CLEAR 0x00010000UL
 #define DYNAMIC_DIRTY_SLOTS 64
 #define DISPLAY_DMA_BITS (DMAF_SETCLR | DMAF_MASTER | DMAF_RASTER | DMAF_COPPER | DMAF_BLITTER)
+#define GAME_DIWSTRT 0x2C81
 #define GAME_DIWSTOP 0xF4C1
+#define GAME_DDFSTRT 0x0038
+#define GAME_DDFSTOP 0x00D0
 #define PAL_FULL_DIWSTOP 0x2CC1
 #define PAL_REFLECTION_START_LINE 0xF4
 #define PAL_REFLECTION_LINES 56
@@ -156,6 +182,14 @@
 #define COPPER_GAMEPLAY_SPARKLE_TOP_Y 10
 #define COPPER_GAMEPLAY_SPARKLE_STEP_Y 25
 #define COPPER_GAMEPLAY_SPARKLE_RESTORE_GAP 2
+#define COPPER_BASE_PAIRS 11UL
+#define COPPER_BPL_PTR_WORDS ((ULONG)DEPTH * 4UL)
+#define COPPER_SPR_PTR_WORDS ((ULONG)HW_SPRITE_COUNT * 4UL)
+#define COPPER_PALETTE_WORDS ((ULONG)AMIGA_ASSET_PALETTE_COUNT * 2UL)
+#define COPPER_END_WORDS 2UL
+#define COPPER_SAFETY_WORDS 16UL
+#define GAME_COPPER_WORDS ((COPPER_BASE_PAIRS * 2UL) + COPPER_BPL_PTR_WORDS + COPPER_SPR_PTR_WORDS + COPPER_PALETTE_WORDS + COPPER_END_WORDS + COPPER_SAFETY_WORDS)
+#define CRACKTRO_COPPER_WORDS ((COPPER_BASE_PAIRS * 2UL) + COPPER_BPL_PTR_WORDS + COPPER_PALETTE_WORDS + COPPER_END_WORDS + COPPER_SAFETY_WORDS)
 #define RENDER_FRAME_SCREEN 0x01u
 #define RENDER_FRAME_SPRITES 0x02u
 #define HIGH_SCORE_COUNT 5
@@ -329,6 +363,7 @@ typedef struct AmigaSfxState {
     UBYTE *samples;
     UBYTE *intro_waves;
     AmigaSfxVoice voice[SFX_VOICE_COUNT];
+    UBYTE major_lockout[AMIGA_SFX_SAMPLE_COUNT];
     UBYTE enabled;
     UBYTE intro_music_active;
     UBYTE intro_music_last_row;
@@ -336,6 +371,7 @@ typedef struct AmigaSfxState {
 } AmigaSfxState;
 
 typedef struct AmigaApp {
+    UBYTE *screen_pool;
     UBYTE *screen[2];
     UBYTE *chip_tiles;
     UBYTE *chip_tile_masks;
@@ -357,6 +393,20 @@ typedef struct AmigaApp {
 static AmigaApp g_app;
 static GameState g_game;
 static CracktroCopperState g_cracktro;
+
+static UBYTE *safe_64k_screen_pool_ptr(UBYTE *raw) {
+    ULONG addr;
+    ULONG aligned;
+    if (!raw) {
+        return 0;
+    }
+    addr = (ULONG)raw;
+    aligned = (addr + (SCREEN_BANK_BYTES - 1UL)) & ~(SCREEN_BANK_BYTES - 1UL);
+    if (aligned + (SCREEN_BANK_BYTES * 2UL) + SCREEN_BYTES <= addr + SCREEN_POOL_BYTES) {
+        return (UBYTE *)aligned;
+    }
+    return raw;
+}
 
 static const AmigaSpriteId kTerrainSprites[3] = {
     AMIGA_SPR_FLOOR,
@@ -918,10 +968,16 @@ static UBYTE stage_modifier_color(StageModifierType modifier) {
 }
 
 ICE_INLINE void wait_blitter(void) {
-    volatile UWORD *dmaconr = (volatile UWORD *)0xDFF002;
-    (void)*dmaconr;
-    while ((*dmaconr & DMAF_BLTDONE) != 0) {
+    (void)CREGS->dmaconr;
+    while ((CREGS->dmaconr & DMAF_BLTDONE) != 0) {
     }
+}
+
+ICE_INLINE void write_custom_ptr_words(volatile APTR *reg, APTR ptr) {
+    ULONG addr = (ULONG)ptr;
+    volatile UWORD *words = (volatile UWORD *)reg;
+    words[0] = (UWORD)(addr >> 16);
+    words[1] = (UWORD)(addr & 0xFFFFu);
 }
 
 ICE_INLINE UWORD read_raster_line(void) {
@@ -1037,6 +1093,14 @@ static APTR alloc_fast_or_public(ULONG bytes) {
 }
 
 static void blit_opaque_tile(const AmigaApp *app, UBYTE *screen, AmigaSpriteId sprite, int x, int y) {
+#if AMIGA_DISABLE_BLITTER_TEST
+    (void)app;
+    (void)screen;
+    (void)sprite;
+    (void)x;
+    (void)y;
+    return;
+#else
     const UBYTE *src;
     UBYTE *dst;
     x = clamp_int(x, 0, SCREEN_W - GAME_TILE_SIZE);
@@ -1050,14 +1114,60 @@ static void blit_opaque_tile(const AmigaApp *app, UBYTE *screen, AmigaSpriteId s
     CREGS->bltcon1 = 0;
     CREGS->bltafwm = 0xFFFF;
     CREGS->bltalwm = 0xFFFF;
-    CREGS->bltbpt = (APTR)src;
-    CREGS->bltdpt = (APTR)dst;
+    write_custom_ptr_words(&CREGS->bltbpt, (APTR)src);
+    write_custom_ptr_words(&CREGS->bltdpt, (APTR)dst);
     CREGS->bltbmod = 0;
     CREGS->bltdmod = ROW_BYTES - AMIGA_ASSET_ROW_BYTES_TILE;
     CREGS->bltsize = (UWORD)(((GAME_TILE_SIZE * DEPTH) << 6) | AMIGA_ASSET_ROW_WORDS_TILE);
+    wait_blitter();
+#endif
 }
 
 static void blit_cookie_bob(const AmigaApp *app, UBYTE *screen, AmigaSpriteId sprite, int x, int y) {
+#if AMIGA_DISABLE_BLITTER_TEST
+    int x0;
+    int y0;
+    int x1;
+    int y1;
+    UBYTE color = 31;
+    (void)app;
+    x = clamp_int(x, 0, SCREEN_W - GAME_TILE_SIZE);
+    y = clamp_int(y, 0, SCREEN_H - GAME_TILE_SIZE);
+    switch (sprite) {
+        case AMIGA_SPR_PLAYER_RIGHT:
+        case AMIGA_SPR_PLAYER_LEFT:
+        case AMIGA_SPR_PLAYER_UP:
+        case AMIGA_SPR_PLAYER_DOWN:
+            color = 30;
+            break;
+        case AMIGA_SPR_ENEMY_A:
+        case AMIGA_SPR_ENEMY_A_ALT:
+            color = 23;
+            break;
+        case AMIGA_SPR_BLOCK_ICE:
+            color = 13;
+            break;
+        default:
+            color = 31;
+            break;
+    }
+    for (y0 = y + 2; y0 < y + GAME_TILE_SIZE - 2; ++y0) {
+        for (x0 = x + 2; x0 < x + GAME_TILE_SIZE - 2; ++x0) {
+            put_pixel(screen, x0, y0, color);
+        }
+    }
+    x1 = x + GAME_TILE_SIZE - 3;
+    y1 = y + GAME_TILE_SIZE - 3;
+    for (x0 = x + 2; x0 <= x1; ++x0) {
+        put_pixel(screen, x0, y + 2, 1);
+        put_pixel(screen, x0, y1, 1);
+    }
+    for (y0 = y + 2; y0 <= y1; ++y0) {
+        put_pixel(screen, x + 2, y0, 1);
+        put_pixel(screen, x1, y0, 1);
+    }
+    return;
+#else
     int shift;
     const UBYTE *mask;
     const UBYTE *src;
@@ -1075,15 +1185,16 @@ static void blit_cookie_bob(const AmigaApp *app, UBYTE *screen, AmigaSpriteId sp
         CREGS->bltcon1 = 0;
         CREGS->bltafwm = 0xFFFF;
         CREGS->bltalwm = 0xFFFF;
-        CREGS->bltapt = (APTR)mask;
-        CREGS->bltbpt = (APTR)src;
-        CREGS->bltcpt = (APTR)dst;
-        CREGS->bltdpt = (APTR)dst;
+        write_custom_ptr_words(&CREGS->bltapt, (APTR)mask);
+        write_custom_ptr_words(&CREGS->bltbpt, (APTR)src);
+        write_custom_ptr_words(&CREGS->bltcpt, (APTR)dst);
+        write_custom_ptr_words(&CREGS->bltdpt, (APTR)dst);
         CREGS->bltamod = 0;
         CREGS->bltbmod = 0;
         CREGS->bltcmod = ROW_BYTES - AMIGA_ASSET_ROW_BYTES_TILE;
         CREGS->bltdmod = ROW_BYTES - AMIGA_ASSET_ROW_BYTES_TILE;
         CREGS->bltsize = (UWORD)(((GAME_TILE_SIZE * DEPTH) << 6) | AMIGA_ASSET_ROW_WORDS_TILE);
+        wait_blitter();
         return;
     }
 
@@ -1093,18 +1204,27 @@ static void blit_cookie_bob(const AmigaApp *app, UBYTE *screen, AmigaSpriteId sp
     CREGS->bltcon1 = (UWORD)(shift << 12);
     CREGS->bltafwm = 0xFFFF;
     CREGS->bltalwm = 0xFFFF;
-    CREGS->bltapt = (APTR)mask;
-    CREGS->bltbpt = (APTR)src;
-    CREGS->bltcpt = (APTR)dst;
-    CREGS->bltdpt = (APTR)dst;
+    write_custom_ptr_words(&CREGS->bltapt, (APTR)mask);
+    write_custom_ptr_words(&CREGS->bltbpt, (APTR)src);
+    write_custom_ptr_words(&CREGS->bltcpt, (APTR)dst);
+    write_custom_ptr_words(&CREGS->bltdpt, (APTR)dst);
     CREGS->bltamod = 0;
     CREGS->bltbmod = 0;
     CREGS->bltcmod = ROW_BYTES - AMIGA_ASSET_ROW_BYTES_WIDE;
     CREGS->bltdmod = ROW_BYTES - AMIGA_ASSET_ROW_BYTES_WIDE;
     CREGS->bltsize = (UWORD)(((GAME_TILE_SIZE * DEPTH) << 6) | AMIGA_ASSET_ROW_WORDS_WIDE);
+    wait_blitter();
+#endif
 }
 
 static void blit_title_overlay(const AmigaApp *app, UBYTE *screen, int x, int y) {
+#if AMIGA_DISABLE_BLITTER_TEST
+    (void)app;
+    (void)screen;
+    (void)x;
+    (void)y;
+    return;
+#else
     int shift;
     UBYTE *dst;
     if (!app->chip_title || !app->chip_title_mask) {
@@ -1120,15 +1240,17 @@ static void blit_title_overlay(const AmigaApp *app, UBYTE *screen, int x, int y)
     CREGS->bltcon1 = (UWORD)(shift << 12);
     CREGS->bltafwm = 0xFFFF;
     CREGS->bltalwm = 0xFFFF;
-    CREGS->bltapt = (APTR)app->chip_title_mask;
-    CREGS->bltbpt = (APTR)app->chip_title;
-    CREGS->bltcpt = (APTR)dst;
-    CREGS->bltdpt = (APTR)dst;
+    write_custom_ptr_words(&CREGS->bltapt, (APTR)app->chip_title_mask);
+    write_custom_ptr_words(&CREGS->bltbpt, (APTR)app->chip_title);
+    write_custom_ptr_words(&CREGS->bltcpt, (APTR)dst);
+    write_custom_ptr_words(&CREGS->bltdpt, (APTR)dst);
     CREGS->bltamod = 0;
     CREGS->bltbmod = 0;
     CREGS->bltcmod = ROW_BYTES - AMIGA_TITLE_OVERLAY_ROW_BYTES;
     CREGS->bltdmod = ROW_BYTES - AMIGA_TITLE_OVERLAY_ROW_BYTES;
     CREGS->bltsize = (UWORD)(((AMIGA_TITLE_OVERLAY_HEIGHT * DEPTH) << 6) | AMIGA_TITLE_OVERLAY_ROW_WORDS);
+    wait_blitter();
+#endif
 }
 
 static void blit_screen_rect(UBYTE *dst_screen, const UBYTE *src_screen, int x, int y, int w, int h) {
@@ -1138,8 +1260,7 @@ static void blit_screen_rect(UBYTE *dst_screen, const UBYTE *src_screen, int x, 
     int y1;
     int row_words;
     int row_bytes;
-    const UBYTE *src;
-    UBYTE *dst;
+    int plane;
 
     if (!dst_screen || !src_screen || w <= 0 || h <= 0) {
         return;
@@ -1158,24 +1279,37 @@ static void blit_screen_rect(UBYTE *dst_screen, const UBYTE *src_screen, int x, 
     if (x1 > SCREEN_W) {
         x1 = SCREEN_W;
     }
+    if (x1 <= x0) {
+        return;
+    }
     row_words = (x1 - x0) >> 4;
     if (row_words <= 0) {
         return;
     }
     row_bytes = row_words << 1;
-    src = src_screen + ((ULONG)y0 * ROW_STRIDE_BYTES) + (ULONG)(x0 >> 3);
-    dst = dst_screen + ((ULONG)y0 * ROW_STRIDE_BYTES) + (ULONG)(x0 >> 3);
 
-    wait_blitter();
-    CREGS->bltcon0 = BLT_USEB | BLT_USED | BLT_MINTERM_COPY_B;
-    CREGS->bltcon1 = 0;
-    CREGS->bltafwm = 0xFFFF;
-    CREGS->bltalwm = 0xFFFF;
-    CREGS->bltbpt = (APTR)src;
-    CREGS->bltdpt = (APTR)dst;
-    CREGS->bltbmod = (WORD)(ROW_BYTES - row_bytes);
-    CREGS->bltdmod = (WORD)(ROW_BYTES - row_bytes);
-    CREGS->bltsize = (UWORD)((((y1 - y0) * DEPTH) << 6) | row_words);
+    for (plane = 0; plane < DEPTH; ++plane) {
+        const UBYTE *src = src_screen +
+                           ((ULONG)y0 * ROW_STRIDE_BYTES) +
+                           ((ULONG)plane * ROW_BYTES) +
+                           (ULONG)(x0 >> 3);
+        UBYTE *dst = dst_screen +
+                     ((ULONG)y0 * ROW_STRIDE_BYTES) +
+                     ((ULONG)plane * ROW_BYTES) +
+                     (ULONG)(x0 >> 3);
+
+        wait_blitter();
+        CREGS->bltcon0 = BLT_USEA | BLT_USED | BLT_MINTERM_COPY_A;
+        CREGS->bltcon1 = 0;
+        CREGS->bltafwm = 0xFFFF;
+        CREGS->bltalwm = 0xFFFF;
+        write_custom_ptr_words(&CREGS->bltapt, (APTR)src);
+        write_custom_ptr_words(&CREGS->bltdpt, (APTR)dst);
+        CREGS->bltamod = (WORD)(ROW_STRIDE_BYTES - row_bytes);
+        CREGS->bltdmod = (WORD)(ROW_STRIDE_BYTES - row_bytes);
+        CREGS->bltsize = (UWORD)(((y1 - y0) << 6) | row_words);
+        wait_blitter();
+    }
 }
 
 ICE_INLINE UWORD read_be_word(const UBYTE *p) {
@@ -1705,9 +1839,21 @@ static void sfx_queue_block_push_swish(AmigaSfxState *sfx) {
     sfx_play_sample_now(sfx, AMIGA_SFX_SAMPLE_BLOCK_PUSH_SWISH, 3, 64);
 }
 
-static void sfx_queue_title_start_jingle(AmigaSfxState *sfx) {
+static BOOL sfx_queue_major_sample(AmigaSfxState *sfx, UBYTE sample_id, UBYTE volume) {
+    if (!sfx || !sfx->enabled || sample_id == AMIGA_SFX_SAMPLE_NONE || sample_id >= AMIGA_SFX_SAMPLE_COUNT) {
+        return FALSE;
+    }
+    if (sfx->major_lockout[sample_id] != 0) {
+        return FALSE;
+    }
     sfx_interrupt(sfx);
-    sfx_queue_sample(sfx, AMIGA_SFX_SAMPLE_TITLE_START_JINGLE, 0, 64);
+    sfx_queue_sample(sfx, sample_id, 0, volume);
+    sfx->major_lockout[sample_id] = (UBYTE)(2 * GAME_FIXED_TICK_HZ);
+    return TRUE;
+}
+
+static void sfx_queue_title_start_jingle(AmigaSfxState *sfx) {
+    (void)sfx_queue_major_sample(sfx, AMIGA_SFX_SAMPLE_TITLE_START_JINGLE, 64);
 }
 
 static void sfx_queue_title_confirm_chirp(AmigaSfxState *sfx) {
@@ -1715,8 +1861,7 @@ static void sfx_queue_title_confirm_chirp(AmigaSfxState *sfx) {
 }
 
 static void sfx_queue_new_high_score_fanfare(AmigaSfxState *sfx) {
-    sfx_interrupt(sfx);
-    sfx_queue_sample(sfx, AMIGA_SFX_SAMPLE_NEW_HIGH_SCORE_FANFARE, 0, 64);
+    (void)sfx_queue_major_sample(sfx, AMIGA_SFX_SAMPLE_NEW_HIGH_SCORE_FANFARE, 64);
 }
 
 static void sfx_dispatch_events(AmigaSfxState *sfx, uint32_t event_flags) {
@@ -1725,23 +1870,19 @@ static void sfx_dispatch_events(AmigaSfxState *sfx, uint32_t event_flags) {
     }
 
     if ((event_flags & GAME_EVENT_GAME_OVER) != 0u) {
-        sfx_interrupt(sfx);
-        sfx_queue_game_over_jingle(sfx);
+        (void)sfx_queue_major_sample(sfx, AMIGA_SFX_SAMPLE_GAME_OVER_JINGLE, 64);
         return;
     }
     if ((event_flags & GAME_EVENT_LIFE_LOST) != 0u) {
-        sfx_interrupt(sfx);
-        sfx_queue_life_loss_fanfare(sfx);
+        (void)sfx_queue_major_sample(sfx, AMIGA_SFX_SAMPLE_LIFE_LOSS_FANFARE, 64);
         event_flags &= (uint32_t)~(GAME_EVENT_COMBO | GAME_EVENT_CRUSH | GAME_EVENT_ITEM_COLLECT | GAME_EVENT_BLOCK_IMPACT);
     }
     if ((event_flags & GAME_EVENT_PLAYER_DIED) != 0u) {
-        sfx_interrupt(sfx);
-        sfx_queue_death_jingle(sfx);
+        (void)sfx_queue_major_sample(sfx, AMIGA_SFX_SAMPLE_DEATH_JINGLE, 64);
         event_flags &= (uint32_t)~(GAME_EVENT_COMBO | GAME_EVENT_CRUSH | GAME_EVENT_ITEM_COLLECT | GAME_EVENT_BLOCK_IMPACT);
     }
     if ((event_flags & GAME_EVENT_ROUND_CLEAR) != 0u) {
-        sfx_interrupt(sfx);
-        sfx_queue_level_up_fanfare(sfx);
+        (void)sfx_queue_major_sample(sfx, AMIGA_SFX_SAMPLE_LEVEL_UP_FANFARE, 64);
         event_flags &= (uint32_t)~(GAME_EVENT_COMBO | GAME_EVENT_CRUSH | GAME_EVENT_ITEM_COLLECT | GAME_EVENT_BLOCK_IMPACT);
     }
     if ((event_flags & GAME_EVENT_SPECIAL_ALIGNMENT) != 0u) {
@@ -1860,6 +2001,11 @@ static void sfx_update(AmigaSfxState *sfx) {
     }
     for (i = 0; i < SFX_VOICE_COUNT; ++i) {
         sfx_update_voice(sfx, &sfx->voice[i]);
+    }
+    for (i = 0; i < AMIGA_SFX_SAMPLE_COUNT; ++i) {
+        if (sfx->major_lockout[i] != 0) {
+            --sfx->major_lockout[i];
+        }
     }
 }
 
@@ -3223,6 +3369,20 @@ static void set_sparkle_cell(RendererState *rr, int x, int y, bool enabled) {
 }
 
 static void render_dirty_static(const AmigaApp *app, UBYTE *screen, int buf, const RenderState *rs) {
+#if 1
+    RendererState *rr = (RendererState *)&app->renderer;
+    int y;
+    (void)app;
+    (void)screen;
+    (void)rs;
+    for (y = 0; y < GAME_GRID_HEIGHT; ++y) {
+        rr->dirty_rows[buf][y] = 0;
+        rr->static_dirty_rows[buf][y] = 0;
+    }
+    rr->dirty_any[buf] = 0;
+    rr->backdrop_valid = 1;
+    return;
+#else
     int x;
     int y;
     RendererState *rr = (RendererState *)&app->renderer;
@@ -3265,17 +3425,14 @@ static void render_dirty_static(const AmigaApp *app, UBYTE *screen, int buf, con
                 ++x;
             } while (x < GAME_GRID_WIDTH && (row & 1UL) != 0);
             end_x = x - 1;
-            blit_screen_rect(
-                screen,
-                app->chip_backdrop,
-                start_x * GAME_TILE_SIZE,
-                y * GAME_TILE_SIZE,
-                (end_x - start_x + 1) * GAME_TILE_SIZE,
-                GAME_TILE_SIZE);
+            (void)start_x;
+            (void)end_x;
+            blit_screen_rect(screen, app->chip_backdrop, 0, y * GAME_TILE_SIZE, SCREEN_W, GAME_TILE_SIZE);
         }
     }
     rr->dirty_any[buf] = 0;
     rr->backdrop_valid = 1;
+#endif
 }
 
 #if AMIGA_USE_GAMEPLAY_HW_SPARKLES
@@ -3488,6 +3645,14 @@ static void draw_cpu_spark(UBYTE *screen, int cx, int cy, UBYTE color) {
 }
 
 static void draw_score_popups(const AmigaApp *app, RendererState *rr, int buf, UBYTE *screen, const RenderState *rs) {
+#if AMIGA_PLAYER_BOB_ONLY_TEST
+    (void)app;
+    (void)rr;
+    (void)buf;
+    (void)screen;
+    (void)rs;
+    return;
+#else
     int i;
     UWORD mask = (UWORD)rs->active_score_popup_mask;
     if (mask == 0u) {
@@ -3523,9 +3688,18 @@ static void draw_score_popups(const AmigaApp *app, RendererState *rr, int buf, U
         save_dynamic_rect(app, rr, buf, screen, px - 2, py - 2, width + 4, 10);
         draw_number_outlined(screen, px, py, (uint32_t)value, 0, (popup->value >= 800) ? 8 : ((popup->value >= 400) ? 12 : 30), 1);
     }
+#endif
 }
 
 static void draw_impact_fx(const AmigaApp *app, RendererState *rr, int buf, UBYTE *screen, const RenderState *rs) {
+#if AMIGA_PLAYER_BOB_ONLY_TEST
+    (void)app;
+    (void)rr;
+    (void)buf;
+    (void)screen;
+    (void)rs;
+    return;
+#else
     int i;
     UWORD mask = (UWORD)rs->active_impact_fx_mask;
     if (mask == 0u) {
@@ -3606,12 +3780,14 @@ static void draw_impact_fx(const AmigaApp *app, RendererState *rr, int buf, UBYT
 #endif
         }
     }
+#endif
 }
 
 static void draw_dynamic_actors(const AmigaApp *app, RendererState *rr, int buf, UBYTE *screen, const RenderState *rs) {
     int i;
     UWORD mask;
 
+#if !AMIGA_PLAYER_BOB_ONLY_TEST
     mask = rr->cached_settle_mask[buf];
     for (i = 0; mask != 0u && i < GAME_MAX_IMPACT_FX; ++i, mask >>= 1) {
         DynamicCache *cache = &rr->cached_settle_block[buf][i];
@@ -3674,15 +3850,18 @@ static void draw_dynamic_actors(const AmigaApp *app, RendererState *rr, int buf,
         cache->key = cache->next_key;
         cache->valid = 1;
     }
+#endif
 
     {
         DynamicCache *cache = &rr->cached_player[buf];
         if (cache->next_valid) {
+#if !AMIGA_PLAYER_BOB_ONLY_TEST
             if (cache->valid &&
                 cache->key == cache->next_key &&
                 dirty_rects_same(&cache->rect, &cache->next_rect)) {
                 return;
             }
+#endif
 #if !AMIGA_FAST_RENDER
             wait_blitter();
             if (rs->player.state == PLAYER_PUSHING && rs->player.push_timer > 0) {
@@ -3945,12 +4124,27 @@ ICE_INLINE bool hud_snapshot_equal(const HudSnapshot *a, const HudSnapshot *b) {
            a->special_border_phase == b->special_border_phase;
 }
 
+static UBYTE ui_line_color(UBYTE color) {
+    switch (color) {
+        case 11:
+        case 14:
+        case 15:
+            return 21;
+        case 16:
+        case 27:
+            return 25;
+        default:
+            return color;
+    }
+}
+
 static void draw_panel(UBYTE *screen, int x0, int y0, int x1, int y1, UBYTE accent) {
     int panel_w = x1 - x0 + 1;
     int panel_h = y1 - y0 + 1;
 #if !AMIGA_FAST_RENDER
     int perimeter = ((panel_w + panel_h) * 2) - 4;
 #endif
+    accent = ui_line_color(accent);
     draw_rect(screen, x0, y0, x1, y1, 1);
     draw_rect(screen, x0, y0, x1, y0, 30);
     draw_rect(screen, x0, y1, x1, y1, 30);
@@ -3996,8 +4190,11 @@ static void draw_card_frame(UBYTE *screen, int x0, int y0, int w, int h, UBYTE a
     int y;
     int x1 = x0 + w - 1;
     int y1 = y0 + h - 1;
-    UBYTE outer = selected ? 30 : 3;
-    UBYTE inner = selected ? accent : 2;
+    UBYTE outer;
+    UBYTE inner;
+    accent = ui_line_color(accent);
+    outer = selected ? 30 : 3;
+    inner = selected ? accent : 2;
 
     draw_rect(screen, x0, y0, x1, y1, 1);
     draw_hline(screen, x0, x1, y0, outer);
@@ -4032,8 +4229,11 @@ static void draw_card_frame(UBYTE *screen, int x0, int y0, int w, int h, UBYTE a
 static void draw_card_selection_chrome(UBYTE *screen, int x0, int y0, int w, int h, UBYTE accent, bool selected) {
     int x1 = x0 + w - 1;
     int y1 = y0 + h - 1;
-    UBYTE outer = selected ? 30 : 3;
-    UBYTE inner = selected ? accent : 2;
+    UBYTE outer;
+    UBYTE inner;
+    accent = ui_line_color(accent);
+    outer = selected ? 30 : 3;
+    inner = selected ? accent : 2;
 
     draw_hline(screen, x0, x1, y0, outer);
     draw_hline(screen, x0, x1, y1, outer);
@@ -4195,6 +4395,16 @@ static void draw_continue_chevrons(UBYTE *screen, int x, int y, UBYTE color_a, U
 }
 
 static void draw_round_intro_visual_lane(const AmigaApp *app, UBYTE *screen, const RenderState *rs, int lane_x0, int lane_y0, int lane_w, int lane_h) {
+#if AMIGA_PLAYER_BOB_ONLY_TEST
+    (void)app;
+    (void)screen;
+    (void)rs;
+    (void)lane_x0;
+    (void)lane_y0;
+    (void)lane_w;
+    (void)lane_h;
+    return;
+#else
     int lane_y = lane_y0 + ((lane_h - GAME_TILE_SIZE) / 2);
     int left_x = lane_x0 + 8;
     int right_x = lane_x0 + lane_w - GAME_TILE_SIZE - 8;
@@ -4245,6 +4455,7 @@ static void draw_round_intro_visual_lane(const AmigaApp *app, UBYTE *screen, con
         blit_cookie_bob(app, screen, AMIGA_SPR_MINE_0, mine_x, lane_y);
     }
     wait_blitter();
+#endif
 }
 
 ICE_INLINE int perk_choice_count_clamped(const RenderState *rs) {
@@ -4465,6 +4676,10 @@ static void draw_meta_choice_delta(UBYTE *screen, const RenderState *rs, int pre
 }
 
 static void draw_title_overlay_art(const AmigaApp *app, UBYTE *screen, int center_x, int top_y) {
+    if (!app || !screen || center_x == -32768 || top_y == -32768) {
+        return;
+    }
+    return;
 #if !AMIGA_FAST_RENDER
     static const int sparkle_anchors[5][2] = {
         {88, 16},
@@ -4808,27 +5023,9 @@ static bool draw_overlay(const AmigaApp *app, UBYTE *screen, const RenderState *
     }
 
     if (rs->phase == GAME_PHASE_ROUND_INTRO && rs->start_title_pending) {
-        draw_title_overlay_art(app, screen, SCREEN_W / 2, 10);
-        draw_centered_text_outlined(
-            screen,
-            0,
-            SCREEN_W - 1,
-            84,
-            "RETROFOUNDRY",
-#if AMIGA_FAST_RENDER
-            30,
-#else
-            ((((g_ui_anim_tick / 14) & 1u) == 0u) ? 29 : 30),
-#endif
-            1);
-        draw_centered_text(screen, 0, SCREEN_W - 1, 96, ICEPANIC_VERSION_SHORT_TEXT " ECS", 30);
-        draw_opening_high_scores(screen, &g_high_scores);
-
-        draw_panel(screen, 70, 148, 249, 178, 14);
-        draw_centered_text_outlined(screen, 70, 249, 155, "ROUND", 30, 1);
-        draw_number_outlined(screen, 164, 155, (uint32_t)rs->round, 2, 31, 1);
-        draw_centered_text_outlined(screen, 70, 249, 163, "FIRE START", 31, 1);
-        draw_continue_chevrons(screen, 70 + ((249 - 70) / 2) - 7, 171, 30, 14);
+        draw_panel(screen, 72, 72, 247, 122, 14);
+        draw_centered_text_outlined(screen, 72, 247, 84, "ICEPANIC", 31, 1);
+        draw_centered_text_outlined(screen, 72, 247, 96, "FIRE START", 30, 1);
         return true;
     }
 
@@ -5027,6 +5224,21 @@ static void mirror_modal_screen_to_other_buffer(
     const RenderState *rs,
     bool selection_delta_only,
     WORD previous_selection) {
+#if 1
+    (void)app;
+    (void)rr;
+    (void)src_buf;
+    (void)modal_rect;
+    (void)modal_key;
+    (void)modal_layout_key;
+    (void)modal_selection;
+    (void)phase;
+    (void)hud;
+    (void)rs;
+    (void)selection_delta_only;
+    (void)previous_selection;
+    return;
+#else
     int dst_buf = src_buf ^ 1;
     ModalCache *dst_modal = &rr->modal[dst_buf];
 
@@ -5048,6 +5260,7 @@ static void mirror_modal_screen_to_other_buffer(
 
     rr->prev_hud[dst_buf] = *hud;
     rr->prev_hud_valid[dst_buf] = 1;
+#endif
 }
 
 static void draw_boot_screen(UBYTE *screen) {
@@ -5056,6 +5269,13 @@ static void draw_boot_screen(UBYTE *screen) {
     draw_panel(screen, 72, 72, 247, 122, 21);
     draw_centered_text(screen, 72, 247, 88, "ICEPANIC", 31);
     draw_centered_text(screen, 72, 247, 104, "LOADING", 30);
+}
+
+static void draw_forced_bob_probe(const AmigaApp *app, UBYTE *screen) {
+    blit_cookie_bob(app, screen, AMIGA_SPR_PLAYER_RIGHT, 24, 40);
+    blit_cookie_bob(app, screen, AMIGA_SPR_BLOCK_ICE, 48, 40);
+    blit_cookie_bob(app, screen, AMIGA_SPR_ENEMY_A, 73, 40);
+    blit_cookie_bob(app, screen, AMIGA_SPR_ITEM_GEM, 101, 40);
 }
 
 static UBYTE render_frame(AmigaApp *app, int buf, UBYTE *screen, const RenderState *rs) {
@@ -5077,6 +5297,31 @@ static UBYTE render_frame(AmigaApp *app, int buf, UBYTE *screen, const RenderSta
 
     update_hidden_block_rows(rr, rs);
     frame_flags = prepare_enemy_hardware_sprites(app, rr, buf, rs, modal_active) ? RENDER_FRAME_SPRITES : 0u;
+#if AMIGA_SINGLE_BUFFER_TEST
+    draw_rect(screen, 0, 0, SCREEN_W - 1, SCREEN_H - 1, 2);
+    modal->valid = 0;
+    modal->active = 0;
+    rr->prev_hud_valid[buf] = 0;
+    rr->cached_player[buf].valid = 0;
+#endif
+#if AMIGA_FORCE_BOB_PROBE_TEST
+    (void)rr;
+    (void)modal;
+    (void)next_modal_rect;
+    (void)next_modal_key;
+    (void)next_modal_layout_key;
+    (void)next_modal_selection;
+    (void)restore_backdrop;
+    (void)partial_modal;
+    (void)overlay_touched;
+    (void)modal_was_active;
+    (void)translucent_modal;
+    (void)hud_changed;
+    (void)hud;
+    (void)rs;
+    draw_forced_bob_probe(app, screen);
+    return (UBYTE)(frame_flags | RENDER_FRAME_SCREEN);
+#endif
 
     if (modal_active) {
         next_modal_rect = modal_rect_for_state(rs);
@@ -5354,20 +5599,9 @@ static UWORD reflection_scroll_for_line(WORD line, ULONG tick) {
 }
 
 static void patch_copper_reflection_wave(CopperState *cs, ULONG tick) {
-#if AMIGA_PAL_REFLECTION
-    WORD i;
-    if (!cs) {
+    if (!cs || tick == 0xffffffffUL) {
         return;
     }
-    for (i = 0; i < PAL_REFLECTION_LINES; ++i) {
-        if (cs->reflect_bplcon1[i]) {
-            *(cs->reflect_bplcon1[i]) = reflection_scroll_for_line(i, tick);
-        }
-    }
-#else
-    (void)cs;
-    (void)tick;
-#endif
 }
 
 static UWORD gameplay_sparkle_y(WORD index, ULONG tick) {
@@ -5388,57 +5622,16 @@ static UWORD gameplay_sparkle_y(WORD index, ULONG tick) {
 }
 
 static void patch_copper_gameplay_sparkle(CopperState *cs, ULONG tick) {
-#if AMIGA_COPPER_GAMEPLAY_SPARKLE
-    WORD i;
-    if (!cs) {
+    if (!cs || tick == 0xffffffffUL) {
         return;
     }
-    for (i = 0; i < COPPER_GAMEPLAY_SPARKLE_COUNT; ++i) {
-        UWORD y = gameplay_sparkle_y(i, tick);
-        UWORD line = (UWORD)(COPPER_DISPLAY_TOP_LINE + y);
-        UWORD restore_line = (UWORD)(line + COPPER_GAMEPLAY_SPARKLE_RESTORE_GAP);
-        if (cs->sparkle_wait[i]) {
-            *(cs->sparkle_wait[i]) = (UWORD)(((line & 0xFFu) << 8) | 0x07);
-        }
-        if (cs->sparkle_restore_wait[i]) {
-            *(cs->sparkle_restore_wait[i]) = (UWORD)(((restore_line & 0xFFu) << 8) | 0x07);
-        }
-        if (cs->sparkle_color6[i]) {
-            *(cs->sparkle_color6[i]) = (UWORD)((((tick >> 3) + (ULONG)i) & 1UL) ? 0x8DF : 0x9EF);
-        }
-        if (cs->sparkle_color7[i]) {
-            *(cs->sparkle_color7[i]) = (UWORD)((((tick >> 2) + (ULONG)i) & 1UL) ? 0xAFF : 0xCFF);
-        }
-        if (cs->sparkle_color8[i]) {
-            *(cs->sparkle_color8[i]) = (UWORD)((((tick >> 3) + (ULONG)i) & 1UL) ? 0xEFF : 0xFFF);
-        }
-        if (cs->sparkle_color9[i]) {
-            *(cs->sparkle_color9[i]) = (UWORD)((((tick >> 2) + (ULONG)i) & 1UL) ? 0xDFF : 0xFFF);
-        }
-        if (cs->sparkle_restore_color6[i]) {
-            *(cs->sparkle_restore_color6[i]) = g_amiga_palette[6];
-        }
-        if (cs->sparkle_restore_color7[i]) {
-            *(cs->sparkle_restore_color7[i]) = g_amiga_palette[7];
-        }
-        if (cs->sparkle_restore_color8[i]) {
-            *(cs->sparkle_restore_color8[i]) = g_amiga_palette[8];
-        }
-        if (cs->sparkle_restore_color9[i]) {
-            *(cs->sparkle_restore_color9[i]) = g_amiga_palette[9];
-        }
-    }
-#else
-    (void)cs;
-    (void)tick;
-#endif
 }
 
 static BOOL build_copper_list(CopperState *cs) {
     UWORD *p;
     UWORD *cop;
     WORD i;
-    ULONG words = 900;
+    ULONG words = GAME_COPPER_WORDS;
     cop = (UWORD *)AllocMem(words * sizeof(UWORD), ICE_MEMF_CHIP | ICE_MEMF_CLEAR);
     if (!cop) {
         return FALSE;
@@ -5447,15 +5640,10 @@ static BOOL build_copper_list(CopperState *cs) {
     cs->bytes = words * sizeof(UWORD);
     p = cop;
 
-    *p++ = DIWSTRT; *p++ = 0x2C81;
-    *p++ = DIWSTOP;
-#if AMIGA_PAL_REFLECTION
-    *p++ = PAL_FULL_DIWSTOP;
-#else
-    *p++ = GAME_DIWSTOP;
-#endif
-    *p++ = DDFSTRT; *p++ = 0x0038;
-    *p++ = DDFSTOP; *p++ = 0x00D0;
+    *p++ = DIWSTRT; *p++ = GAME_DIWSTRT;
+    *p++ = DIWSTOP; *p++ = GAME_DIWSTOP;
+    *p++ = DDFSTRT; *p++ = GAME_DDFSTRT;
+    *p++ = DDFSTOP; *p++ = GAME_DDFSTOP;
     *p++ = BPLCON0; *p++ = (UWORD)(0x0200 | (DEPTH << 12));
     *p++ = BPLCON1; *p++ = 0x0000;
     *p++ = BPLCON2;
@@ -5468,19 +5656,19 @@ static BOOL build_copper_list(CopperState *cs) {
     *p++ = BPL2MOD; *p++ = ROW_STRIDE_BYTES - ROW_BYTES;
 
     for (i = 0; i < DEPTH; ++i) {
-        *p++ = (UWORD)(BPL1PTH + (i * 4));
+        *p++ = CUSTOM_PTR_HI(bplpt, i);
         cs->bpl_hi[i] = p;
         *p++ = 0;
-        *p++ = (UWORD)(BPL1PTL + (i * 4));
+        *p++ = CUSTOM_PTR_LO(bplpt, i);
         cs->bpl_lo[i] = p;
         *p++ = 0;
     }
 
     for (i = 0; i < HW_SPRITE_COUNT; ++i) {
-        *p++ = (UWORD)(SPR0PTH + (i * 4));
+        *p++ = CUSTOM_PTR_HI(sprpt, i);
         cs->spr_hi[i] = p;
         *p++ = 0;
-        *p++ = (UWORD)(SPR0PTL + (i * 4));
+        *p++ = CUSTOM_PTR_LO(sprpt, i);
         cs->spr_lo[i] = p;
         *p++ = 0;
     }
@@ -5494,85 +5682,10 @@ static BOOL build_copper_list(CopperState *cs) {
 #endif
     }
 
-#if AMIGA_COPPER_GAMEPLAY_SPARKLE
-    for (i = 0; i < COPPER_GAMEPLAY_SPARKLE_COUNT; ++i) {
-        UWORD y = (UWORD)(COPPER_GAMEPLAY_SPARKLE_TOP_Y + (i * COPPER_GAMEPLAY_SPARKLE_STEP_Y));
-        UWORD line = (UWORD)(COPPER_DISPLAY_TOP_LINE + y);
-        *p++ = (UWORD)(((line & 0xFFu) << 8) | 0x07);
-        cs->sparkle_wait[i] = p - 1;
-        *p++ = 0xFFFE;
-        *p++ = COLOR_REG(6);
-        cs->sparkle_color6[i] = p;
-        *p++ = 0x9EF;
-        *p++ = COLOR_REG(7);
-        cs->sparkle_color7[i] = p;
-        *p++ = 0xBFF;
-        *p++ = COLOR_REG(8);
-        cs->sparkle_color8[i] = p;
-        *p++ = 0xFFF;
-        *p++ = COLOR_REG(9);
-        cs->sparkle_color9[i] = p;
-        *p++ = 0xEFF;
-
-        line = (UWORD)(line + COPPER_GAMEPLAY_SPARKLE_RESTORE_GAP);
-        *p++ = (UWORD)(((line & 0xFFu) << 8) | 0x07);
-        cs->sparkle_restore_wait[i] = p - 1;
-        *p++ = 0xFFFE;
-        *p++ = COLOR_REG(6);
-        cs->sparkle_restore_color6[i] = p;
-        *p++ = g_amiga_palette[6];
-        *p++ = COLOR_REG(7);
-        cs->sparkle_restore_color7[i] = p;
-        *p++ = g_amiga_palette[7];
-        *p++ = COLOR_REG(8);
-        cs->sparkle_restore_color8[i] = p;
-        *p++ = g_amiga_palette[8];
-        *p++ = COLOR_REG(9);
-        cs->sparkle_restore_color9[i] = p;
-        *p++ = g_amiga_palette[9];
-    }
-#endif
-
-#if AMIGA_PAL_REFLECTION
-    *p++ = (UWORD)((PAL_REFLECTION_START_LINE << 8) | 0x07);
+    *p++ = 0xF407;
     *p++ = 0xFFFE;
-    *p++ = BPLCON1;
-    cs->reflect_bplcon1[0] = p;
-    *p++ = 0x0000;
-    *p++ = BPL1MOD; *p++ = PAL_REFLECTION_BPLMOD;
-    *p++ = BPL2MOD; *p++ = PAL_REFLECTION_BPLMOD;
-    for (i = 0; i < DEPTH; ++i) {
-        *p++ = (UWORD)(BPL1PTH + (i * 4));
-        cs->reflect_bpl_hi[i] = p;
-        *p++ = 0;
-        *p++ = (UWORD)(BPL1PTL + (i * 4));
-        cs->reflect_bpl_lo[i] = p;
-        *p++ = 0;
-    }
-    for (i = 0; i < AMIGA_ASSET_PALETTE_COUNT; ++i) {
-        *p++ = (UWORD)COLOR_REG(i);
-#if AMIGA_USE_HW_SPRITES
-        *p++ = icy_reflection_color((i == 29) ? g_amiga_palette[2] : g_amiga_palette[i]);
-#else
-        *p++ = icy_reflection_color(g_amiga_palette[i]);
-#endif
-    }
-    for (i = 1; i < PAL_REFLECTION_LINES; ++i) {
-        UWORD line = (UWORD)(PAL_REFLECTION_START_LINE + i);
-        *p++ = (UWORD)(((line & 0xFFu) << 8) | 0x07);
-        *p++ = 0xFFFE;
-        *p++ = BPLCON1;
-        cs->reflect_bplcon1[i] = p;
-        *p++ = 0x0000;
-    }
-#else
-    *p++ = (UWORD)((0xF4 << 8) | 0x07);
-    *p++ = 0xFFFE;
-    *p++ = BPLCON0;
-    *p++ = 0x0000;
     *p++ = COLOR00;
     *p++ = 0x0000;
-#endif
     *p++ = 0xFFFF;
     *p++ = 0xFFFE;
 
@@ -5617,20 +5730,19 @@ static UWORD cracktro_wave_color(WORD y, WORD tick, WORD channel) {
 }
 
 static void patch_cracktro_copper_wave(CracktroCopperState *ct, WORD tick) {
-    WORD y;
-    for (y = 0; y < SCREEN_H; ++y) {
-        *(ct->color8[y]) = cracktro_wave_color(y, tick, 0);
-        *(ct->color18[y]) = cracktro_wave_color(y, (WORD)(tick + 4), 1);
-        *(ct->color23[y]) = cracktro_wave_color(y, (WORD)(tick + 8), 2);
+    if (!ct) {
+        return;
     }
+    CREGS->color[8] = cracktro_wave_color((WORD)(tick << 1), tick, 0);
+    CREGS->color[18] = cracktro_wave_color((WORD)((tick << 1) + 16), (WORD)(tick + 4), 1);
+    CREGS->color[23] = cracktro_wave_color((WORD)((tick << 1) + 32), (WORD)(tick + 8), 2);
 }
 
 static BOOL build_cracktro_copper_list(CracktroCopperState *ct) {
     UWORD *p;
     UWORD *cop;
     WORD i;
-    WORD y;
-    ULONG words = 1800;
+    ULONG words = CRACKTRO_COPPER_WORDS;
 
     memset(ct, 0, sizeof(*ct));
     cop = (UWORD *)AllocMem(words * sizeof(UWORD), ICE_MEMF_CHIP | ICE_MEMF_CLEAR);
@@ -5641,10 +5753,10 @@ static BOOL build_cracktro_copper_list(CracktroCopperState *ct) {
     ct->copper.bytes = words * sizeof(UWORD);
     p = cop;
 
-    *p++ = DIWSTRT; *p++ = 0x2C81;
-    *p++ = DIWSTOP; *p++ = 0xF4C1;
-    *p++ = DDFSTRT; *p++ = 0x0038;
-    *p++ = DDFSTOP; *p++ = 0x00D0;
+    *p++ = DIWSTRT; *p++ = GAME_DIWSTRT;
+    *p++ = DIWSTOP; *p++ = GAME_DIWSTOP;
+    *p++ = DDFSTRT; *p++ = GAME_DDFSTRT;
+    *p++ = DDFSTOP; *p++ = GAME_DDFSTOP;
     *p++ = BPLCON0; *p++ = (UWORD)(0x0200 | (DEPTH << 12));
     *p++ = BPLCON1; *p++ = 0x0000;
     *p++ = BPLCON2; *p++ = 0x0000;
@@ -5652,10 +5764,10 @@ static BOOL build_cracktro_copper_list(CracktroCopperState *ct) {
     *p++ = BPL2MOD; *p++ = ROW_STRIDE_BYTES - ROW_BYTES;
 
     for (i = 0; i < DEPTH; ++i) {
-        *p++ = (UWORD)(BPL1PTH + (i * 4));
+        *p++ = CUSTOM_PTR_HI(bplpt, i);
         ct->copper.bpl_hi[i] = p;
         *p++ = 0;
-        *p++ = (UWORD)(BPL1PTL + (i * 4));
+        *p++ = CUSTOM_PTR_LO(bplpt, i);
         ct->copper.bpl_lo[i] = p;
         *p++ = 0;
     }
@@ -5665,24 +5777,8 @@ static BOOL build_cracktro_copper_list(CracktroCopperState *ct) {
         *p++ = g_amiga_palette[i];
     }
 
-    for (y = 0; y < SCREEN_H; ++y) {
-        *p++ = (UWORD)(((0x2C + y) << 8) | 0x07);
-        *p++ = 0xFFFE;
-        *p++ = COLOR_REG(8);
-        ct->color8[y] = p;
-        *p++ = g_amiga_palette[8];
-        *p++ = COLOR_REG(18);
-        ct->color18[y] = p;
-        *p++ = g_amiga_palette[18];
-        *p++ = COLOR_REG(23);
-        ct->color23[y] = p;
-        *p++ = g_amiga_palette[23];
-    }
-
-    *p++ = (UWORD)((0xF4 << 8) | 0x07);
+    *p++ = 0xF407;
     *p++ = 0xFFFE;
-    *p++ = BPLCON0;
-    *p++ = 0x0000;
     *p++ = COLOR00;
     *p++ = 0x0000;
     *p++ = 0xFFFF;
@@ -5828,13 +5924,14 @@ static void reset_display(void) {
 
 static BOOL app_alloc(AmigaApp *app) {
     memset(app, 0, sizeof(*app));
-    app->screen[0] = (UBYTE *)AllocMem(SCREEN_BYTES, ICE_MEMF_CHIP | ICE_MEMF_CLEAR);
-    app->screen[1] = (UBYTE *)AllocMem(SCREEN_BYTES, ICE_MEMF_CHIP | ICE_MEMF_CLEAR);
+    app->screen_pool = (UBYTE *)AllocMem(SCREEN_POOL_BYTES, ICE_MEMF_CHIP | ICE_MEMF_CLEAR);
+    app->screen[0] = safe_64k_screen_pool_ptr(app->screen_pool);
+    app->screen[1] = app->screen[0] ? app->screen[0] + SCREEN_BANK_BYTES : 0;
+    app->chip_backdrop = app->screen[0] ? app->screen[0] + (SCREEN_BANK_BYTES * 2UL) : 0;
     app->chip_tiles = (UBYTE *)AllocMem(TILE_CHIP_BYTES, ICE_MEMF_CHIP);
     app->chip_tile_masks = (UBYTE *)AllocMem(TILE_MASK_CHIP_BYTES, ICE_MEMF_CHIP);
     app->chip_bobs = (UBYTE *)AllocMem(BOB_CHIP_BYTES, ICE_MEMF_CHIP);
     app->chip_masks = (UBYTE *)AllocMem(MASK_CHIP_BYTES, ICE_MEMF_CHIP);
-    app->chip_backdrop = (UBYTE *)AllocMem(SCREEN_BYTES, ICE_MEMF_CHIP | ICE_MEMF_CLEAR);
     app->chip_title = (UBYTE *)AllocMem(TITLE_CHIP_BYTES, ICE_MEMF_CHIP);
     app->chip_title_mask = (UBYTE *)AllocMem(TITLE_MASK_CHIP_BYTES, ICE_MEMF_CHIP);
 #if AMIGA_HW_SPRITES_ENABLED
@@ -5892,10 +5989,7 @@ static void app_free(AmigaApp *app) {
         FreeMem(app->chip_title, TITLE_CHIP_BYTES);
         app->chip_title = 0;
     }
-    if (app->chip_backdrop) {
-        FreeMem(app->chip_backdrop, SCREEN_BYTES);
-        app->chip_backdrop = 0;
-    }
+    app->chip_backdrop = 0;
     if (app->chip_tile_masks) {
         FreeMem(app->chip_tile_masks, TILE_MASK_CHIP_BYTES);
         app->chip_tile_masks = 0;
@@ -5916,13 +6010,11 @@ static void app_free(AmigaApp *app) {
         FreeMem(app->chip_tiles, TILE_CHIP_BYTES);
         app->chip_tiles = 0;
     }
-    if (app->screen[0]) {
-        FreeMem(app->screen[0], SCREEN_BYTES);
-        app->screen[0] = 0;
-    }
-    if (app->screen[1]) {
-        FreeMem(app->screen[1], SCREEN_BYTES);
-        app->screen[1] = 0;
+    app->screen[0] = 0;
+    app->screen[1] = 0;
+    if (app->screen_pool) {
+        FreeMem(app->screen_pool, SCREEN_POOL_BYTES);
+        app->screen_pool = 0;
     }
 }
 
@@ -6039,7 +6131,18 @@ int main(void) {
 #if AMIGA_HW_SPRITES_ENABLED
     patch_copper_spriteptrs(&app->copper, app->hw_sprite_bank[0]);
 #endif
+#if AMIGA_CRACKTRO_ENABLED
     run_cracktro_intro(app);
+#else
+    draw_boot_screen(app->screen[0]);
+    wait_blitter();
+    patch_copper_bplptrs(&app->copper, app->screen[0]);
+    CREGS->cop1lc = (ULONG)app->copper.list;
+    CREGS->copjmp1 = 0;
+    CREGS->dmacon = DISPLAY_DMA_BITS;
+    g_sprite_dma_enabled = FALSE;
+    wait_frame_boundary_hw();
+#endif
 
     load_high_score_table(&g_high_scores);
     memset(&g_high_score_entry, 0, sizeof(g_high_score_entry));
@@ -6060,7 +6163,9 @@ int main(void) {
     mark_core_dirty_static(&app->renderer, game);
     game_clear_dirty_static(game);
     render_frame(app, 0, app->screen[0], rs);
+#if !AMIGA_SINGLE_BUFFER_TEST
     render_frame(app, 1, app->screen[1], rs);
+#endif
     last_rendered_phase = rs->phase;
     wait_blitter();
     patch_copper_bplptrs(&app->copper, app->screen[0]);
@@ -6128,7 +6233,9 @@ int main(void) {
             --post_high_score_pause_ticks;
             sfx_update(&app->sfx);
         } else {
-            if (input.fire_released && game->phase != GAME_PHASE_PLAYING) {
+            if (input.fire_released &&
+                game->phase != GAME_PHASE_PLAYING &&
+                !(game->phase == GAME_PHASE_PERK_CHOICE && game->phase_timer_ticks > 0)) {
                 sfx_queue_title_confirm_chirp(&app->sfx);
             }
             PROFILE_COLOR(0x400);
@@ -6191,6 +6298,9 @@ int main(void) {
             UBYTE render_flags;
             WORD render_buf = draw_idx;
             BOOL phase_changed = (rs->phase != last_rendered_phase) ? TRUE : FALSE;
+#if AMIGA_SINGLE_BUFFER_TEST
+            render_buf = 0;
+#endif
 #if AMIGA_HW_SPRITES_ENABLED
             if (title_hw_sparkles_active(rs)) {
                 ULONG title_key = modal_key_for_state(rs);
@@ -6210,8 +6320,13 @@ int main(void) {
             }
             if ((render_flags & RENDER_FRAME_SCREEN) != 0u) {
                 patch_copper_bplptrs(&app->copper, app->screen[render_buf]);
+#if AMIGA_SINGLE_BUFFER_TEST
+                draw_idx = 0;
+                sprite_draw_idx = 0;
+#else
                 draw_idx = (WORD)(render_buf ^ 1);
                 sprite_draw_idx = draw_idx;
+#endif
             }
 #if AMIGA_HW_SPRITES_ENABLED
             if ((render_flags & RENDER_FRAME_SPRITES) != 0u) {

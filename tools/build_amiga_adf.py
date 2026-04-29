@@ -11,7 +11,7 @@ import tempfile
 from pathlib import Path
 
 
-DEFAULT_RELEASE_BASENAME = "icepanic-v0.9.0-beta.4-amiga-ecs-pal"
+DEFAULT_RELEASE_BASENAME = "icepanic-v0.9.1-beta.2-amiga-ocs-pal"
 
 
 def run_xdftool(xdftool: str, args: list[str]) -> None:
@@ -33,6 +33,8 @@ def build_adf(
     xdftool: str,
     disk_info: Path | None,
     nfo_path: Path | None,
+    sfx_path: Path | None,
+    gfx_path: Path | None,
 ) -> None:
     if not exe_path.is_file():
         raise RuntimeError(f"Amiga executable not found: {exe_path}")
@@ -89,6 +91,34 @@ def build_adf(
                 ]
             )
 
+        if sfx_path and sfx_path.is_file():
+            cmd.extend(
+                [
+                    "+",
+                    "write",
+                    str(sfx_path),
+                    "Icepanic.sfx",
+                    "+",
+                    "protect",
+                    "Icepanic.sfx",
+                    "rwed",
+                ]
+            )
+
+        if gfx_path and gfx_path.is_file():
+            cmd.extend(
+                [
+                    "+",
+                    "write",
+                    str(gfx_path),
+                    "Icepanic.gfx",
+                    "+",
+                    "protect",
+                    "Icepanic.gfx",
+                    "rwed",
+                ]
+            )
+
         run_xdftool(xdftool_path, cmd)
 
 
@@ -116,6 +146,16 @@ def main() -> int:
         default="ICEPANIC.NFO",
         help="Optional release NFO to include as Icepanic.nfo when present.",
     )
+    parser.add_argument(
+        "--sfx",
+        default="src/platform_amiga/amiga_sfx_assets_ocs.bin",
+        help="Optional Paula SFX bank to include as Icepanic.sfx.",
+    )
+    parser.add_argument(
+        "--gfx",
+        default="src/platform_amiga/amiga_assets_ocs.bin",
+        help="Optional graphics bank to include as Icepanic.gfx.",
+    )
     args = parser.parse_args()
 
     try:
@@ -126,6 +166,8 @@ def main() -> int:
             args.xdftool,
             Path(args.disk_info) if args.disk_info else None,
             Path(args.nfo) if args.nfo else None,
+            Path(args.sfx) if args.sfx else None,
+            Path(args.gfx) if args.gfx else None,
         )
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)

@@ -6,19 +6,29 @@ XDFTOOL ?= xdftool
 TARGET_CONFIG ?= +kick13s
 ASSET_TARGET_CONFIG ?= +kick13
 OBJDIR ?= build/amiga
-ICEPANIC_VERSION ?= 0.9.0-beta.4
-ICEPANIC_PLATFORM ?= amiga-ecs-pal
+ICEPANIC_VERSION ?= 0.9.1-beta.2
+ICEPANIC_PLATFORM ?= amiga-ocs-pal
 RELEASE_BASENAME ?= icepanic-v$(ICEPANIC_VERSION)-$(ICEPANIC_PLATFORM)
-OUT ?= $(OBJDIR)/$(RELEASE_BASENAME)
-ADF ?= $(OBJDIR)/$(RELEASE_BASENAME).adf
+OCS_BETA_VERSION ?= $(ICEPANIC_VERSION)
+OCS_BETA_PLATFORM ?= $(ICEPANIC_PLATFORM)
+OCS_BETA_BASENAME ?= icepanic-v$(OCS_BETA_VERSION)-$(OCS_BETA_PLATFORM)
+OCS_BETA_OUT ?= $(OBJDIR)/$(OCS_BETA_BASENAME)
+OCS_BETA_ADF ?= $(OBJDIR)/$(OCS_BETA_BASENAME).adf
+ECS_LEGACY_VERSION ?= 0.9.0-beta.4
+ECS_LEGACY_PLATFORM ?= amiga-ecs-pal
+ECS_LEGACY_BASENAME ?= icepanic-v$(ECS_LEGACY_VERSION)-$(ECS_LEGACY_PLATFORM)
+ECS_LEGACY_OUT ?= $(OBJDIR)/$(ECS_LEGACY_BASENAME)
+ECS_LEGACY_ADF ?= $(OBJDIR)/$(ECS_LEGACY_BASENAME).adf
 
 VBCC_ROOT ?= $(VBCC)
 NDK_INC ?= $(VBCC_ROOT)/NDK_1.3/INCLUDE-STRIP1.3/INCLUDE.H
 
 CFLAGS ?= -O3
+OCS_BETA_CFLAGS ?= -O2
 ASSET_CFLAGS ?= -c99 -O3
+OCS_BETA_ASSET_CFLAGS ?= -c99 -O2
 AMIGA_PROFILE ?= 0
-AMIGA_SFX ?= 1
+AMIGA_SFX ?= 0
 AMIGA_PROFILE_DEFINE :=
 AMIGA_SFX_DEFINE :=
 ifeq ($(AMIGA_PROFILE),1)
@@ -27,7 +37,7 @@ endif
 ifeq ($(AMIGA_SFX),0)
 AMIGA_SFX_DEFINE := -DAMIGA_NO_SFX
 endif
-AMIGA_DEFINES ?= -DICEPANIC_AMIGA_SMALL_STACK -DAMIGA_FAST_RENDER=1 -DAMIGA_USE_HW_SPRITES=0 -DAMIGA_USE_HW_SPARKLES=1 -DAMIGA_USE_GAMEPLAY_HW_SPARKLES=0 -DAMIGA_RENDER_DIVISOR=1 $(AMIGA_PROFILE_DEFINE) $(AMIGA_SFX_DEFINE)
+AMIGA_DEFINES ?= -DICEPANIC_AMIGA_SMALL_STACK -DAMIGA_FAST_RENDER=1 -DAMIGA_USE_HW_SPRITES=0 -DAMIGA_USE_HW_SPARKLES=0 -DAMIGA_USE_GAMEPLAY_HW_SPARKLES=0 -DAMIGA_RENDER_DIVISOR=1 $(AMIGA_PROFILE_DEFINE) $(AMIGA_SFX_DEFINE)
 INCLUDES := -Isrc/core -Isrc/platform_amiga -I$(NDK_INC)
 
 OBJS := \
@@ -39,19 +49,33 @@ endif
 OBJS += \
 	$(OBJDIR)/main.o
 
-.PHONY: all clean assets adf
+.PHONY: all clean assets adf ocs-beta ocs-beta-adf ecs-legacy ecs-legacy-adf
 
-all: $(ADF)
+all: $(OCS_BETA_ADF)
 
-assets: src/platform_amiga/amiga_assets.c src/platform_amiga/amiga_assets.h src/platform_amiga/amiga_sfx_assets.c src/platform_amiga/amiga_sfx_assets.h
+assets: src/platform_amiga/amiga_assets.c src/platform_amiga/amiga_assets.h src/platform_amiga/amiga_assets_ocs.c src/platform_amiga/amiga_assets_ocs.h src/platform_amiga/amiga_assets_ocs.bin src/platform_amiga/amiga_sfx_assets.c src/platform_amiga/amiga_sfx_assets.h src/platform_amiga/amiga_sfx_assets_ocs.c src/platform_amiga/amiga_sfx_assets_ocs.h src/platform_amiga/amiga_sfx_assets_ocs.bin
 
-adf: $(ADF)
+adf: $(OCS_BETA_ADF)
+
+ocs-beta: $(OCS_BETA_ADF)
+
+ocs-beta-adf: $(OCS_BETA_ADF)
+
+ecs-legacy: $(ECS_LEGACY_ADF)
+
+ecs-legacy-adf: $(ECS_LEGACY_ADF)
 
 src/platform_amiga/amiga_assets.c src/platform_amiga/amiga_assets.h: assets/tileset.bin assets/title_overlay.bin tools/build_amiga_bob_assets.py
 	$(PYTHON) tools/build_amiga_bob_assets.py
 
+src/platform_amiga/amiga_assets_ocs.c src/platform_amiga/amiga_assets_ocs.h src/platform_amiga/amiga_assets_ocs.bin: assets/tileset.bin assets/title_overlay.bin tools/build_amiga_assets_ocs.py
+	$(PYTHON) tools/build_amiga_assets_ocs.py
+
 src/platform_amiga/amiga_sfx_assets.c src/platform_amiga/amiga_sfx_assets.h: tools/build_amiga_sfx_assets.py
 	$(PYTHON) tools/build_amiga_sfx_assets.py
+
+src/platform_amiga/amiga_sfx_assets_ocs.c src/platform_amiga/amiga_sfx_assets_ocs.h src/platform_amiga/amiga_sfx_assets_ocs.bin: src/platform_amiga/amiga_sfx_assets.c src/platform_amiga/amiga_sfx_assets.h tools/build_amiga_sfx_assets_ocs.py
+	$(PYTHON) tools/build_amiga_sfx_assets_ocs.py
 
 $(OBJDIR):
 	$(PYTHON) -c "import os; os.makedirs(r'$(OBJDIR)', exist_ok=True)"
@@ -62,17 +86,35 @@ $(OBJDIR)/game.o: src/core/game.c src/core/game.h src/core/procgen_wfc_templates
 $(OBJDIR)/amiga_assets.o: src/platform_amiga/amiga_assets.c src/platform_amiga/amiga_assets.h | $(OBJDIR)
 	$(VC) $(ASSET_TARGET_CONFIG) $(ASSET_CFLAGS) $(AMIGA_DEFINES) $(INCLUDES) -c $< -o $@
 
+$(OBJDIR)/amiga_assets_ocs_beta.o: src/platform_amiga/amiga_assets_ocs.c src/platform_amiga/amiga_assets_ocs.h src/platform_amiga/amiga_assets.h | $(OBJDIR)
+	$(VC) $(ASSET_TARGET_CONFIG) $(OCS_BETA_ASSET_CFLAGS) $(INCLUDES) -c $< -o $@
+
+$(OBJDIR)/amiga_sfx_assets_ocs_beta.o: src/platform_amiga/amiga_sfx_assets_ocs.c src/platform_amiga/amiga_sfx_assets_ocs.h src/platform_amiga/amiga_sfx_assets.h | $(OBJDIR)
+	$(VC) $(ASSET_TARGET_CONFIG) $(OCS_BETA_ASSET_CFLAGS) $(INCLUDES) -c $< -o $@
+
+$(OBJDIR)/game_ocs_beta.o: src/core/game.c src/core/game.h src/core/procgen_wfc_templates.h | $(OBJDIR)
+	$(VC) $(TARGET_CONFIG) $(OCS_BETA_CFLAGS) -DICEPANIC_AMIGA_SMALL_STACK -DICEPANIC_AMIGA_OCS_FIXED_LEVELS $(INCLUDES) -c $< -o $@
+
 $(OBJDIR)/amiga_sfx_assets.o: src/platform_amiga/amiga_sfx_assets.c src/platform_amiga/amiga_sfx_assets.h | $(OBJDIR)
 	$(VC) $(ASSET_TARGET_CONFIG) $(ASSET_CFLAGS) $(AMIGA_DEFINES) $(INCLUDES) -c $< -o $@
 
 $(OBJDIR)/main.o: src/platform_amiga/main.c src/platform_amiga/amiga_assets.h src/platform_amiga/amiga_sfx_assets.h src/core/game.h | $(OBJDIR)
 	$(VC) $(TARGET_CONFIG) $(CFLAGS) $(AMIGA_DEFINES) $(INCLUDES) -c $< -o $@
 
-$(OUT): $(OBJS)
+$(OBJDIR)/ice_panic_ocs.o: src/platform_amiga/ice_panic_ocs.c src/platform_amiga/amiga_assets_ocs.h src/platform_amiga/amiga_assets.h src/platform_amiga/amiga_sfx_assets_ocs.h src/platform_amiga/amiga_sfx_assets.h src/core/game.h | $(OBJDIR)
+	$(VC) $(TARGET_CONFIG) $(OCS_BETA_CFLAGS) $(INCLUDES) -c $< -o $@
+
+$(ECS_LEGACY_OUT): $(OBJS)
 	$(VC) $(TARGET_CONFIG) $(OBJS) -o $@
 
-$(ADF): $(OUT) tools/build_amiga_adf.py ICEPANIC.NFO | $(OBJDIR)
-	$(PYTHON) tools/build_amiga_adf.py --exe $(OUT) --output $(ADF) --xdftool $(XDFTOOL) --nfo ICEPANIC.NFO
+$(ECS_LEGACY_ADF): $(ECS_LEGACY_OUT) tools/build_amiga_adf.py ICEPANIC.NFO | $(OBJDIR)
+	$(PYTHON) tools/build_amiga_adf.py --exe $(ECS_LEGACY_OUT) --output $(ECS_LEGACY_ADF) --xdftool $(XDFTOOL) --nfo ICEPANIC.NFO --gfx "" --sfx ""
+
+$(OCS_BETA_OUT): $(OBJDIR)/game_ocs_beta.o $(OBJDIR)/amiga_assets_ocs_beta.o $(OBJDIR)/amiga_sfx_assets_ocs_beta.o $(OBJDIR)/ice_panic_ocs.o
+	$(VC) $(TARGET_CONFIG) $(OBJDIR)/game_ocs_beta.o $(OBJDIR)/amiga_assets_ocs_beta.o $(OBJDIR)/amiga_sfx_assets_ocs_beta.o $(OBJDIR)/ice_panic_ocs.o -o $@
+
+$(OCS_BETA_ADF): $(OCS_BETA_OUT) src/platform_amiga/amiga_assets_ocs.bin src/platform_amiga/amiga_sfx_assets_ocs.bin tools/build_amiga_adf.py ICEPANIC.NFO | $(OBJDIR)
+	$(PYTHON) tools/build_amiga_adf.py --exe $(OCS_BETA_OUT) --output $(OCS_BETA_ADF) --xdftool $(XDFTOOL) --nfo ICEPANIC.NFO --gfx src/platform_amiga/amiga_assets_ocs.bin --sfx src/platform_amiga/amiga_sfx_assets_ocs.bin
 
 clean:
 	$(PYTHON) -c "import shutil; shutil.rmtree(r'$(OBJDIR)', ignore_errors=True)"

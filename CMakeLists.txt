@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(icepanic VERSION 0.9.0 LANGUAGES C)
+project(icepanic VERSION 0.9.1 LANGUAGES C)
 set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT icepanic_sdl)
 
 set(CMAKE_C_STANDARD 17)

@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.9.1-beta.2
+
+First primary OCS beta release, replacing the old ECS beta line.
+
+- Promoted the strict OCS/probe build to the default Amiga beta target.
+- Kept the proven OCS DMA memory map: deterministic graphics arena first, separate validated Paula SFX pool second, and CPU-only gameplay state after DMA pools are secured.
+- Packaged OCS graphics and SFX as external `Icepanic.gfx` and `Icepanic.sfx` payloads instead of bulk art/audio arrays in code.
+- Ported the title screen, title sparkles, high-score display/entry, UI panels, authored-level gameplay, HUD, bombs/mines, SFX, fanfares, and PAL copper reflection into the OCS beta path.
+- Continued gameplay/UI performance work with dirty-only playfield updates and delta HUD/UI drawing.
+
 ## v0.9.0-beta.4
 
 Fourth Amiga ECS beta release candidate.

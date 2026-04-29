@@ -1,17 +1,29 @@
 #include "game.h"
+
+#ifndef ICEPANIC_AMIGA_OCS_FIXED_LEVELS
 #include "procgen_wfc_templates.h"
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#if defined(ICEPANIC_AMIGA_OCS_FIXED_LEVELS) && defined(ICEPANIC_AMIGA_SMALL_STACK)
+#define ICEPANIC_AMIGA_OCS_ARCADE_CORE 1
+#endif
 
 enum {
     FP_SHIFT = 8,
     FP_ONE = 1 << FP_SHIFT,
     TILE_FP = GAME_TILE_SIZE * FP_ONE,
 
+#if defined(ICEPANIC_AMIGA_OCS_ARCADE_CORE)
+    PLAYER_SPEED_FP = 2 * FP_ONE,
+#else
     PLAYER_SPEED_FP = (3 * FP_ONE) / 2,
+#endif
     BLOCK_SPEED_FP = (9 * FP_ONE) / 4,
+    PLAYER_DIR_BUFFER_TICKS = 14,
 
     PUSH_ANTICIPATION_TICKS = 4,
     ROUND_INTRO_TICKS = 50,
@@ -20,7 +32,7 @@ enum {
     PLAYER_DYING_TICKS = 45,
     ROUND_CLEAR_TICKS = 70,
     ROUND_CLEAR_PENDING_TICKS = 12,
-    PERK_CHOICE_FIRE_LOCK_TICKS = GAME_FIXED_TICK_HZ,
+    PERK_CHOICE_FIRE_LOCK_TICKS = GAME_FIXED_TICK_HZ / 4,
     GAME_OVER_TICKS = 130,
     DEFAULT_LIVES = 4,
     MAX_LIVES = 7,
@@ -91,7 +103,9 @@ enum {
     SHARDS_PER_CRUSH = 1,
     SHARDS_PER_ITEM = 1,
     SHARDS_PER_MYSTERY_ITEM = 2,
-    SHARDS_PER_ROUND_CLEAR = 3
+    SHARDS_PER_ROUND_CLEAR = 3,
+
+    OCS_BOB_ENEMY_SOFT_CAP = 6
 };
 
 static const uint32_t SCORE_CAP = 99999999u;
@@ -147,6 +161,188 @@ static const LevelDef kDefaultLevels[] = {
         "#......####.....I..#",
         "#...I...S......E...#",
         "#........I.........#",
+        "####################",
+    }},
+    {{
+        "####################",
+        "#..I...S....I....E.#",
+        "#.P..##....I.......#",
+        "#.....I....###..I..#",
+        "#.I.....E....S.....#",
+        "#..####......I..E..#",
+        "#......I..##.......#",
+        "#..E.......I..###..#",
+        "#....S..I..........#",
+        "#..I.....####...I..#",
+        "#..............I...#",
+        "####################",
+    }},
+    {{
+        "####################",
+        "#....I....S.....E..#",
+        "#.P.###..I....I....#",
+        "#......I......###..#",
+        "#..I......E........#",
+        "#....####....S..I..#",
+        "#..E.....I.........#",
+        "#......###..I......#",
+        "#.I..S......E..I...#",
+        "#..........####....#",
+        "#...I..............#",
+        "####################",
+    }},
+    {{
+        "####################",
+        "#..S...I....E...I..#",
+        "#.P....I..###......#",
+        "#..###.......I..E..#",
+        "#......####........#",
+        "#.I..E......S..I...#",
+        "#.......I..###.....#",
+        "#..####.......I....#",
+        "#.....S..E........I#",
+        "#..I.......####....#",
+        "#..........I.......#",
+        "####################",
+    }},
+    {{
+        "####################",
+        "#...I..E....S...I..#",
+        "#.P..##..I.........#",
+        "#....##......###...#",
+        "#.I......E.....I...#",
+        "#..###..S..###.....#",
+        "#......I......E....#",
+        "#..I...####........#",
+        "#.....E....I..S....#",
+        "#...###.......I....#",
+        "#........I.........#",
+        "####################",
+    }},
+    {{
+        "####################",
+        "#.I....S....E....I.#",
+        "#.P..I...####......#",
+        "#....###......I....#",
+        "#..E......I.....E..#",
+        "#.....U..S..U......#",
+        "#..I......I....###.#",
+        "#......####........#",
+        "#.E...I......S..I..#",
+        "#....###...........#",
+        "#........I.........#",
+        "####################",
+    }},
+    {{
+        "####################",
+        "#...S.....I....E...#",
+        "#.P....##....I.....#",
+        "#..I...##..E....I..#",
+        "#......####........#",
+        "#.I..U......U..S...#",
+        "#.......I..###.....#",
+        "#..E..###......I...#",
+        "#.....I....E.......#",
+        "#..S......####..I..#",
+        "#.................I#",
+        "####################",
+    }},
+    {{
+        "####################",
+        "#..I..E..S.....I...#",
+        "#.P..###.....I.....#",
+        "#......I..###...E..#",
+        "#..I.......U.......#",
+        "#....####..S..####.#",
+        "#.E......I.........#",
+        "#.....###....I.....#",
+        "#..S.....E....I....#",
+        "#....I......###....#",
+        "#........I.........#",
+        "####################",
+    }},
+    {{
+        "####################",
+        "#...I....E..S...I..#",
+        "#.P....I..##.......#",
+        "#..###.......I..E..#",
+        "#.....U..I..U......#",
+        "#.I......S.....I...#",
+        "#...####.....###...#",
+        "#..E....I.........E#",
+        "#......###..I......#",
+        "#.S..I.......####..#",
+        "#.................I#",
+        "####################",
+    }},
+    {{
+        "####################",
+        "#.S....I....E...I..#",
+        "#.P..##..I.....##..#",
+        "#....##.....E......#",
+        "#..I....####....I..#",
+        "#.....U..S..U......#",
+        "#.E.......I....E...#",
+        "#...####......I....#",
+        "#..I.....###.......#",
+        "#......S.....I.....#",
+        "#...........I......#",
+        "####################",
+    }},
+    {{
+        "####################",
+        "#..I..E....S....I..#",
+        "#.P....###....I....#",
+        "#.I.......E..###...#",
+        "#....U..I..U.......#",
+        "#..###....S....###.#",
+        "#......I.....E.....#",
+        "#.E..####.........I#",
+        "#.....I....###.....#",
+        "#..S......I....E...#",
+        "#........I.........#",
+        "####################",
+    }},
+    {{
+        "####################",
+        "#...S..I...E....I..#",
+        "#.P..I..##.....E...#",
+        "#....I..##..I......#",
+        "#..###......U..###.#",
+        "#.E....I..S........#",
+        "#.....####....I....#",
+        "#..I.......E....I..#",
+        "#......U......S....#",
+        "#.E....###.........#",
+        "#...........I......#",
+        "####################",
+    }},
+    {{
+        "####################",
+        "#.I....E..S....I...#",
+        "#.P..##.....I..##..#",
+        "#....##..E.........#",
+        "#..I....###....I...#",
+        "#....U..S..U..E....#",
+        "#.E......I.........#",
+        "#...###......###...#",
+        "#..S....I..E....I..#",
+        "#.....I.....####...#",
+        "#.................I#",
+        "####################",
+    }},
+    {{
+        "####################",
+        "#..S..E....I....I..#",
+        "#.P....I..###......#",
+        "#..###......I..E...#",
+        "#.I....U......U....#",
+        "#....####..S.......#",
+        "#..E.....I....###..#",
+        "#......###..E......#",
+        "#.I..S.......I.....#",
+        "#...E....####...I..#",
+        "#...........I......#",
         "####################",
     }}
 };
@@ -257,6 +453,11 @@ static void mark_all_static_dirty(GameState *gs) {
     }
 }
 
+static void copy_level(LevelDef *dst, const LevelDef *src) {
+    memcpy(dst, src, sizeof(*dst));
+}
+
+#if !defined(ICEPANIC_AMIGA_OCS_ARCADE_CORE)
 static bool level_char_allowed(char c) {
     switch (c) {
         case '#':
@@ -271,10 +472,6 @@ static bool level_char_allowed(char c) {
         default:
             return false;
     }
-}
-
-static void copy_level(LevelDef *dst, const LevelDef *src) {
-    memcpy(dst, src, sizeof(*dst));
 }
 
 static bool validate_level_rows_internal(const char rows[GAME_GRID_HEIGHT][GAME_GRID_WIDTH + 1]) {
@@ -1097,6 +1294,7 @@ static int add_landmark_breakable_escorts(
     return added;
 }
 
+#ifndef ICEPANIC_AMIGA_OCS_FIXED_LEVELS
 static bool procgen_template_is_recent(const GameState *gs, int template_index) {
     for (int i = 0; i < gs->recent_procgen_template_count; ++i) {
         if (gs->recent_procgen_template_ids[i] == template_index) {
@@ -1759,8 +1957,16 @@ static bool generate_procedural_level(GameState *gs, int round_index, LevelDef *
 
     return false;
 }
+#endif
+#endif
 
 static void resolve_level_for_round(GameState *gs, int round_index, LevelDef *out_level) {
+#ifdef ICEPANIC_AMIGA_OCS_FIXED_LEVELS
+    const int level_count = (int)(sizeof(kDefaultLevels) / sizeof(kDefaultLevels[0]));
+    const int level_idx = (round_index - 1) % level_count;
+    copy_level(out_level, &kDefaultLevels[(level_idx < 0) ? 0 : level_idx]);
+    gs->debug_last_procgen_template_index = -1;
+#else
     const uint32_t rng_before_template_attempt = gs->rng_state;
     int template_index = -1;
     const bool wfc_enabled_for_round = (round_index >= 1) || gs->debug_force_procgen_template_pending;
@@ -1781,6 +1987,7 @@ static void resolve_level_for_round(GameState *gs, int round_index, LevelDef *ou
     const int level_idx = (round_index - 1) % level_count;
     copy_level(out_level, &kDefaultLevels[(level_idx < 0) ? 0 : level_idx]);
     gs->debug_last_procgen_template_index = -1;
+#endif
 }
 
 static uint32_t rng_next(GameState *gs) {
@@ -1863,6 +2070,28 @@ static bool direction_is_held(const InputState *in, Direction dir) {
     }
 }
 
+static Direction choose_held_player_direction(const Player *player, const InputState *in) {
+    if (player && player->buffered_dir != DIR_NONE && direction_is_held(in, player->buffered_dir)) {
+        return player->buffered_dir;
+    }
+    if (player && player->facing != DIR_NONE && direction_is_held(in, player->facing)) {
+        return player->facing;
+    }
+    if (in->up) {
+        return DIR_UP;
+    }
+    if (in->down) {
+        return DIR_DOWN;
+    }
+    if (in->left) {
+        return DIR_LEFT;
+    }
+    if (in->right) {
+        return DIR_RIGHT;
+    }
+    return DIR_NONE;
+}
+
 static void reset_fire_confirm_gate(GameState *gs) {
     gs->fire_confirm_armed = false;
 }
@@ -1907,6 +2136,9 @@ static bool enemy_can_trigger_mine(const Enemy *enemy) {
 }
 
 static bool any_live_enemy_active(const GameState *gs) {
+#if defined(ICEPANIC_AMIGA_SMALL_STACK)
+    return gs->alive_enemy_mask != 0u;
+#else
     uint16_t mask = live_enemy_mask_for_game(gs);
     for (int i = 0; mask != 0u && i < gs->enemy_count; ++i, mask >>= 1) {
         if ((mask & 1u) != 0u && gs->enemies[i].alive) {
@@ -1919,6 +2151,7 @@ static bool any_live_enemy_active(const GameState *gs) {
         }
     }
     return false;
+#endif
 }
 
 static void clear_enemy_alive_bit(GameState *gs, int enemy_idx) {
@@ -1940,9 +2173,7 @@ static void mark_enemy_defeated(GameState *gs, int enemy_idx) {
 
 static int live_enemy_count_fast(const GameState *gs) {
 #if defined(ICEPANIC_AMIGA_SMALL_STACK)
-    if (gs->alive_enemy_count > 0) {
-        return gs->alive_enemy_count;
-    }
+    return gs->alive_enemy_count;
 #endif
     return count_alive_enemies(gs);
 }
@@ -2052,6 +2283,9 @@ static bool occupancy_has_tile(
     const uint32_t occupancy[GAME_GRID_HEIGHT],
     int x,
     int y) {
+    if (occupancy == NULL) {
+        return false;
+    }
     if (!inside_grid(x, y)) {
         return false;
     }
@@ -2182,6 +2416,20 @@ static void add_run_shards(GameState *gs, int amount) {
     gs->run_shards = (next < gs->run_shards) ? gs->run_shards : next;
 }
 
+#if defined(ICEPANIC_AMIGA_OCS_ARCADE_CORE)
+static StageModifierType pick_stage_modifier_for_round(GameState *gs, int round_index) {
+    return STAGE_MOD_NONE;
+}
+
+static void apply_stage_modifier_to_round_config(GameState *gs) {
+}
+
+static void apply_stage_modifier_to_map(
+    GameState *gs,
+    const int enemy_spawns[GAME_MAX_ENEMIES][2],
+    int enemy_spawn_count) {
+}
+#else
 static const StageModifierType kStageModifiers[] = {
     STAGE_MOD_SWARM,
     STAGE_MOD_SHATTERED_ICE,
@@ -2364,6 +2612,20 @@ static void apply_stage_modifier_to_round_config(GameState *gs) {
         default:
             break;
     }
+#if defined(ICEPANIC_AMIGA_OCS_ARCADE_CORE)
+    if (gs->round_config.enemy_count > OCS_BOB_ENEMY_SOFT_CAP) {
+        const int overflow = gs->round_config.enemy_count - OCS_BOB_ENEMY_SOFT_CAP;
+        gs->round_config.enemy_count = OCS_BOB_ENEMY_SOFT_CAP;
+        gs->round_config.aggression_percent = clampi(
+            gs->round_config.aggression_percent + overflow * 4,
+            28,
+            86);
+        gs->round_config.enemy_speed_fp = clampi(
+            gs->round_config.enemy_speed_fp + overflow * (FP_ONE / 16),
+            FP_ONE,
+            (5 * FP_ONE) / 2);
+    }
+#endif
     {
         const int special_slots = (gs->round_config.enemy_count > 1) ? (gs->round_config.enemy_count - 1) : 0;
         gs->round_config.enemy_ghost_count = clampi(
@@ -2500,7 +2762,17 @@ static void apply_stage_modifier_to_map(
         }
     }
 }
+#endif
 
+#if defined(ICEPANIC_AMIGA_OCS_ARCADE_CORE) && defined(ICEPANIC_AMIGA_OCS_SKIP_PERK_UI)
+static int meta_unlock_tier_from_progress(uint32_t progress_points) {
+    return 1;
+}
+
+static void enter_perk_choice(GameState *gs, int next_round) {
+    game_start_round(gs, next_round);
+}
+#else
 static int meta_upgrade_cost(MetaUpgradeType upgrade) {
     switch (upgrade) {
         case META_UPGRADE_LIFE_PACK:
@@ -3036,6 +3308,7 @@ static void enter_perk_choice(GameState *gs, int next_round) {
     build_perk_choices(gs);
     ensure_early_mine_perk_offer(gs);
 }
+#endif
 
 static void clear_active_item_list(GameState *gs) {
     gs->active_item_count = 0;
@@ -3336,6 +3609,102 @@ static void on_enemy_crushed(GameState *gs) {
     }
 }
 
+#if defined(ICEPANIC_AMIGA_OCS_ARCADE_CORE)
+static void spawn_score_popup(GameState *gs, int tile_x, int tile_y, int value) {
+    if (gs && tile_x == -9999 && tile_y == -9999 && value == -9999) {
+        gs->active_score_popup_count = 0;
+    }
+}
+
+static ImpactFx *spawn_impact_fx(GameState *gs, GamePixelFp pixel_fp_x, GamePixelFp pixel_fp_y, ImpactFxStyle style, int ttl_ticks) {
+    int slot = -1;
+    int weakest_ttl = 32767;
+    int weakest_index = 0;
+    uint16_t active_mask = active_impact_fx_mask_for_game(gs);
+    for (int i = 0; i < GAME_MAX_IMPACT_FX; ++i) {
+        if ((active_mask & slot_bit(i)) == 0u || !gs->impact_fx[i].active) {
+            slot = i;
+            break;
+        }
+        if (gs->impact_fx[i].ttl_ticks < weakest_ttl) {
+            weakest_ttl = gs->impact_fx[i].ttl_ticks;
+            weakest_index = i;
+        }
+    }
+    if (slot < 0) {
+        slot = weakest_index;
+    }
+    {
+        ImpactFx *fx = &gs->impact_fx[slot];
+        if (fx->active && fx->anchors_block && inside_grid(fx->anchor_tile_x, fx->anchor_tile_y)) {
+            mark_static_cell_dirty(gs, fx->anchor_tile_x, fx->anchor_tile_y);
+        }
+        if (!fx->active) {
+            ++gs->active_impact_fx_count;
+        }
+        gs->active_impact_fx_mask |= slot_bit(slot);
+        fx->pixel_fp_x = pixel_fp_x;
+        fx->pixel_fp_y = pixel_fp_y;
+        fx->style = (int)style;
+        fx->base_ttl_ticks = ttl_ticks;
+        fx->anchor_tile_x = -1;
+        fx->anchor_tile_y = -1;
+        fx->direction = DIR_NONE;
+        fx->ttl_ticks = ttl_ticks;
+        fx->anchors_block = false;
+        fx->active = true;
+        return fx;
+    }
+}
+
+static void spawn_impact_fx_on_tile(GameState *gs, int tile_x, int tile_y, ImpactFxStyle style, int ttl_ticks) {
+    if (style != IMPACT_FX_STYLE_MINE_BLAST &&
+        (style < IMPACT_FX_STYLE_ENEMY_DEATH_A || style > IMPACT_FX_STYLE_ENEMY_DEATH_D)) {
+        return;
+    }
+    (void)spawn_impact_fx(
+        gs,
+        tile_to_fp(tile_x) + (GamePixelFp)((GAME_TILE_SIZE / 2) * FP_ONE),
+        tile_to_fp(tile_y) + (GamePixelFp)((GAME_TILE_SIZE / 2) * FP_ONE),
+        style,
+        ttl_ticks);
+}
+
+static void update_score_popups(GameState *gs) {
+    if (gs && gs->active_score_popup_count < 0) {
+        gs->active_score_popup_count = 0;
+    }
+}
+
+static void update_impact_fx(GameState *gs) {
+    uint16_t mask = active_impact_fx_mask_for_game(gs);
+    for (int i = 0; mask != 0u && i < GAME_MAX_IMPACT_FX; ++i, mask >>= 1) {
+        uint16_t bit = slot_bit(i);
+        ImpactFx *fx = &gs->impact_fx[i];
+        if ((mask & 1u) == 0u) {
+            continue;
+        }
+        if (!fx->active) {
+            gs->active_impact_fx_mask &= (uint16_t)~bit;
+            if (gs->active_impact_fx_count > 0) {
+                --gs->active_impact_fx_count;
+            }
+            continue;
+        }
+        --fx->ttl_ticks;
+        if (fx->ttl_ticks <= 0) {
+            if (fx->anchors_block && inside_grid(fx->anchor_tile_x, fx->anchor_tile_y)) {
+                mark_static_cell_dirty(gs, fx->anchor_tile_x, fx->anchor_tile_y);
+            }
+            fx->active = false;
+            gs->active_impact_fx_mask &= (uint16_t)~bit;
+            if (gs->active_impact_fx_count > 0) {
+                --gs->active_impact_fx_count;
+            }
+        }
+    }
+}
+#else
 static void spawn_score_popup(GameState *gs, int tile_x, int tile_y, int value) {
     static const int kPopupOffsetPx[][2] = {
         {0, 0},
@@ -3536,6 +3905,7 @@ static void update_impact_fx(GameState *gs) {
         fx->pixel_fp_y -= IMPACT_FX_RISE_FP;
     }
 }
+#endif
 
 static int timer_danger_threshold_ticks_for_stage(const GameState *gs) {
     if (gs->stage_modifier == STAGE_MOD_FROST_SIREN) {
@@ -3659,6 +4029,7 @@ static void reset_player_runtime_state(GameState *gs, int tile_x, int tile_y) {
     gs->player.facing = DIR_RIGHT;
     gs->player.move_dir = DIR_NONE;
     gs->player.buffered_dir = DIR_NONE;
+    gs->player.buffered_dir_ticks = 0;
     gs->player.state = PLAYER_IDLE;
     gs->player.move_remaining_fp = 0;
     gs->player.push_timer = 0;
@@ -4079,6 +4450,34 @@ static bool can_start_slide(const GameState *gs, int block_x, int block_y, Direc
     return true;
 }
 
+#if defined(ICEPANIC_AMIGA_OCS_ARCADE_CORE) && defined(ICEPANIC_AMIGA_OCS_SKIP_MINES)
+static void clear_active_mine_list(GameState *gs) {
+    gs->active_mine_count = 0;
+}
+
+static void consume_queued_mine_drop(GameState *gs) {
+    gs->player.mine_drop_queued = false;
+}
+
+static bool try_drop_mine(GameState *gs) {
+    gs->player.mine_drop_queued = false;
+    return false;
+}
+
+static void trigger_mine_explosion(GameState *gs, int start_x, int start_y) {
+    if (gs && inside_grid(start_x, start_y)) {
+        gs->mines[start_y][start_x] = false;
+        gs->mine_fuse_ticks[start_y][start_x] = 0;
+        mark_static_cell_dirty(gs, start_x, start_y);
+    }
+}
+
+static void update_mine_fuses(GameState *gs) {
+    if (gs && gs->active_mine_count < 0) {
+        gs->active_mine_count = 0;
+    }
+}
+#else
 static void clear_active_mine_list(GameState *gs) {
     gs->active_mine_count = 0;
     memset(gs->active_mine_x, 0, sizeof(gs->active_mine_x));
@@ -4357,6 +4756,7 @@ static int amiga_mine_visual_frame_for_fuse(int fuse_ticks) {
     return ((fuse_ticks & 7) == 0) ? 1 : 0;
 }
 #endif
+#endif
 
 static void player_bump(Player *player, Direction dir) {
     player->facing = dir;
@@ -4424,16 +4824,17 @@ static void update_player_intent(GameState *gs, const InputState *in) {
 
     if (in->newest_press != DIR_NONE) {
         player->buffered_dir = in->newest_press;
+        player->buffered_dir_ticks = PLAYER_DIR_BUFFER_TICKS;
+    } else if (direction_is_held(in, player->buffered_dir)) {
+        player->buffered_dir = choose_held_player_direction(player, in);
+        player->buffered_dir_ticks = PLAYER_DIR_BUFFER_TICKS;
+    } else if (in->up || in->down || in->left || in->right) {
+        player->buffered_dir = choose_held_player_direction(player, in);
+        player->buffered_dir_ticks = PLAYER_DIR_BUFFER_TICKS;
+    } else if (player->buffered_dir_ticks > 0) {
+        --player->buffered_dir_ticks;
     } else {
-        if (in->up) {
-            player->buffered_dir = DIR_UP;
-        } else if (in->down) {
-            player->buffered_dir = DIR_DOWN;
-        } else if (in->left) {
-            player->buffered_dir = DIR_LEFT;
-        } else if (in->right) {
-            player->buffered_dir = DIR_RIGHT;
-        }
+        player->buffered_dir = DIR_NONE;
     }
 
     if (player->state == PLAYER_WALKING || player->state == PLAYER_PUSHING || player->state == PLAYER_DYING) {
@@ -4444,11 +4845,19 @@ static void update_player_intent(GameState *gs, const InputState *in) {
         return;
     }
 
-    if (!direction_is_held(in, player->buffered_dir) && in->newest_press == DIR_NONE) {
+    if (!direction_is_held(in, player->buffered_dir) &&
+        in->newest_press == DIR_NONE &&
+        player->buffered_dir_ticks <= 0) {
         return;
     }
 
-    (void)try_start_player_action(gs, player->buffered_dir);
+    if (try_start_player_action(gs, player->buffered_dir)) {
+        player->buffered_dir = DIR_NONE;
+        player->buffered_dir_ticks = 0;
+    } else if (!direction_is_held(in, player->buffered_dir)) {
+        player->buffered_dir = DIR_NONE;
+        player->buffered_dir_ticks = 0;
+    }
 }
 
 static void update_player_motion(GameState *gs) {
@@ -4581,6 +4990,13 @@ static int enemy_decision_pause_ticks(
     int enemy_idx,
     const uint32_t occupancy[GAME_GRID_HEIGHT],
     const uint32_t moving_block_occupancy[GAME_GRID_HEIGHT]) {
+#if defined(ICEPANIC_AMIGA_OCS_ARCADE_CORE)
+    if (gs->round > 2 ||
+        gs->stage_modifier == STAGE_MOD_SWARM ||
+        gs->stage_modifier == STAGE_MOD_FROST_SIREN) {
+        return 0;
+    }
+#endif
     const Enemy *enemy = &gs->enemies[enemy_idx];
     Direction valid[4];
     int valid_count = 0;
@@ -4641,36 +5057,6 @@ static void enemy_step_movement(Enemy *enemy) {
     }
 }
 
-static Direction turn_left_direction(Direction d) {
-    switch (d) {
-        case DIR_UP:
-            return DIR_LEFT;
-        case DIR_DOWN:
-            return DIR_RIGHT;
-        case DIR_LEFT:
-            return DIR_DOWN;
-        case DIR_RIGHT:
-            return DIR_UP;
-        default:
-            return DIR_NONE;
-    }
-}
-
-static Direction turn_right_direction(Direction d) {
-    switch (d) {
-        case DIR_UP:
-            return DIR_RIGHT;
-        case DIR_DOWN:
-            return DIR_LEFT;
-        case DIR_LEFT:
-            return DIR_UP;
-        case DIR_RIGHT:
-            return DIR_DOWN;
-        default:
-            return DIR_NONE;
-    }
-}
-
 static bool direction_in_list(const Direction *dirs, int count, Direction dir) {
     if (dir == DIR_NONE) {
         return false;
@@ -4692,61 +5078,6 @@ static Direction pick_direction_from_list(GameState *gs, const Direction *dirs, 
 #else
     return dirs[rng_next(gs) % (uint32_t)count];
 #endif
-}
-
-static Direction choose_wanderer_direction(GameState *gs, const Enemy *enemy, const Direction *valid, int valid_count) {
-    Direction pool[4];
-    Direction candidates[2];
-    int pool_count = 0;
-    int candidate_count = 0;
-    const int current_dist = abs_int_fast(gs->player.tile_x - enemy->tile_x) +
-                             abs_int_fast(gs->player.tile_y - enemy->tile_y);
-    const Direction left = turn_left_direction(enemy->direction);
-    const Direction right = turn_right_direction(enemy->direction);
-    const Direction reverse = opposite_direction(enemy->direction);
-    uint32_t roll;
-
-    if (valid_count <= 1) {
-        return valid_count == 1 ? valid[0] : DIR_NONE;
-    }
-
-    for (int i = 0; i < valid_count; ++i) {
-        const Direction d = valid[i];
-        const int nx = enemy->tile_x + kDirDx[d];
-        const int ny = enemy->tile_y + kDirDy[d];
-        const int dist = abs_int_fast(gs->player.tile_x - nx) + abs_int_fast(gs->player.tile_y - ny);
-        if (!gs->player.alive || dist >= current_dist) {
-            pool[pool_count++] = d;
-        }
-    }
-    if (pool_count <= 0) {
-        for (int i = 0; i < valid_count; ++i) {
-            pool[pool_count++] = valid[i];
-        }
-    }
-
-    roll = rng_next(gs) & 0xFFu;
-    if (roll < 160u) {
-        if (direction_in_list(pool, pool_count, left)) {
-            candidates[candidate_count++] = left;
-        }
-        if (direction_in_list(pool, pool_count, right)) {
-            candidates[candidate_count++] = right;
-        }
-    } else if (roll < 216u) {
-        if (direction_in_list(pool, pool_count, enemy->direction)) {
-            candidates[candidate_count++] = enemy->direction;
-        }
-    } else if (roll < 240u) {
-        if (direction_in_list(pool, pool_count, reverse)) {
-            candidates[candidate_count++] = reverse;
-        }
-    }
-
-    if (candidate_count > 0) {
-        return pick_direction_from_list(gs, candidates, candidate_count);
-    }
-    return pick_direction_from_list(gs, pool, pool_count);
 }
 
 static Direction choose_hunter_direction(GameState *gs, const Enemy *enemy, const Direction *valid, int valid_count) {
@@ -4785,6 +5116,61 @@ static Direction choose_ghost_direction(GameState *gs, const Enemy *enemy, const
     return choose_hunter_direction(gs, enemy, valid, valid_count);
 }
 
+static Direction choose_chaser_style_direction(GameState *gs, const Enemy *enemy, Direction *valid, int valid_count, int chase_percent) {
+    const Direction reverse = opposite_direction(enemy->direction);
+
+    if (valid_count <= 0) {
+        return DIR_NONE;
+    }
+
+    if (valid_count > 1 && reverse != DIR_NONE) {
+        int compact = 0;
+        for (int i = 0; i < valid_count; ++i) {
+            if (valid[i] == reverse) {
+                continue;
+            }
+            valid[compact++] = valid[i];
+        }
+        if (compact > 0) {
+            valid_count = compact;
+        }
+    }
+
+    chase_percent = clampi(chase_percent, 0, 100);
+
+#if defined(ICEPANIC_AMIGA_SMALL_STACK)
+    {
+        const int chase_roll = (int)(rng_next(gs) & 0xFFu);
+        const int chase_threshold = (chase_percent >= 100) ? 256 : ((chase_percent <= 0) ? 0 : ((chase_percent * 41) >> 4));
+        if (gs->player.alive && chase_roll < chase_threshold) {
+#else
+    {
+        const int chase_roll = (int)(rng_next(gs) % 100u);
+        if (gs->player.alive && chase_roll < chase_percent) {
+#endif
+            int best_distance = 9999;
+            Direction best_dir = valid[0];
+            for (int i = 0; i < valid_count; ++i) {
+                const Direction d = valid[i];
+                const int nx = enemy->tile_x + kDirDx[d];
+                const int ny = enemy->tile_y + kDirDy[d];
+                const int dist = abs_int_fast(gs->player.tile_x - nx) + abs_int_fast(gs->player.tile_y - ny);
+                if (dist < best_distance) {
+                    best_distance = dist;
+                    best_dir = d;
+                }
+            }
+            return best_dir;
+        }
+    }
+
+#if defined(ICEPANIC_AMIGA_SMALL_STACK)
+    return valid[rng_pick_small(gs, valid_count)];
+#else
+    return valid[rng_next(gs) % (uint32_t)valid_count];
+#endif
+}
+
 static Direction choose_enemy_direction(
     GameState *gs,
     int enemy_idx,
@@ -4815,64 +5201,46 @@ static Direction choose_enemy_direction(
     }
 
     if (enemy->type == ENEMY_TYPE_WANDERER) {
-        return choose_wanderer_direction(gs, enemy, valid, valid_count);
+        return choose_chaser_style_direction(
+            gs,
+            enemy,
+            valid,
+            valid_count,
+            gs->round_config.aggression_percent + 35);
     }
 
-    const Direction reverse = opposite_direction(enemy->direction);
-    if (valid_count > 1 && reverse != DIR_NONE) {
-        int compact = 0;
-        for (int i = 0; i < valid_count; ++i) {
-            if (valid[i] == reverse) {
-                continue;
-            }
-            valid[compact++] = valid[i];
-        }
-        if (compact > 0) {
-            valid_count = compact;
-        }
-    }
-
-    int chase_percent = gs->round_config.aggression_percent;
-
-#if defined(ICEPANIC_AMIGA_SMALL_STACK)
-    const int chase_roll = (int)(rng_next(gs) & 0xFFu);
-    const int chase_threshold = (chase_percent >= 100) ? 256 : ((chase_percent <= 0) ? 0 : ((chase_percent * 41) >> 4));
-    if (gs->player.alive && chase_roll < chase_threshold) {
-#else
-    const int chase_roll = (int)(rng_next(gs) % 100u);
-    if (gs->player.alive && chase_roll < chase_percent) {
-#endif
-        int best_distance = 9999;
-        Direction best_dir = valid[0];
-        for (int i = 0; i < valid_count; ++i) {
-            const Direction d = valid[i];
-            const int nx = enemy->tile_x + kDirDx[d];
-            const int ny = enemy->tile_y + kDirDy[d];
-            const int dist = abs_int_fast(gs->player.tile_x - nx) + abs_int_fast(gs->player.tile_y - ny);
-            if (dist < best_distance) {
-                best_distance = dist;
-                best_dir = d;
-            }
-        }
-        return best_dir;
-    }
-
-#if defined(ICEPANIC_AMIGA_SMALL_STACK)
-    return valid[rng_pick_small(gs, valid_count)];
-#else
-    return valid[rng_next(gs) % (uint32_t)valid_count];
-#endif
+    return choose_chaser_style_direction(gs, enemy, valid, valid_count, gs->round_config.aggression_percent);
 }
 
 static void update_enemies(GameState *gs) {
     ICEPANIC_SCRATCH uint32_t enemy_occupancy[GAME_GRID_HEIGHT];
     ICEPANIC_SCRATCH uint32_t moving_block_occupancy[GAME_GRID_HEIGHT];
+    const uint32_t *moving_block_occupancy_ptr = NULL;
     uint16_t enemy_mask;
+    bool enemy_occupancy_ready = false;
+    bool moving_block_occupancy_ready = false;
+#define ENSURE_ENEMY_OCCUPANCY() \
+    do { \
+        if (!enemy_occupancy_ready) { \
+            build_enemy_occupancy(gs, enemy_occupancy); \
+            enemy_occupancy_ready = true; \
+        } \
+    } while (0)
+#define ENSURE_MOVING_BLOCK_OCCUPANCY() \
+    do { \
+        if (!moving_block_occupancy_ready) { \
+            if (active_moving_block_mask_for_game(gs) != 0u) { \
+                build_moving_block_occupancy(gs, moving_block_occupancy); \
+                moving_block_occupancy_ptr = moving_block_occupancy; \
+            } else { \
+                moving_block_occupancy_ptr = NULL; \
+            } \
+            moving_block_occupancy_ready = true; \
+        } \
+    } while (0)
     if (!any_live_enemy_active(gs)) {
         return;
     }
-    build_enemy_occupancy(gs, enemy_occupancy);
-    build_moving_block_occupancy(gs, moving_block_occupancy);
     enemy_mask = live_enemy_mask_for_game(gs);
 
     for (int i = 0; enemy_mask != 0u && i < gs->enemy_count; ++i, enemy_mask >>= 1) {
@@ -4891,7 +5259,9 @@ static void update_enemies(GameState *gs) {
                 enemy->decision_cooldown_ticks = 0;
                 if (enemy_can_trigger_mine(enemy) && gs->mines[enemy->tile_y][enemy->tile_x]) {
                     trigger_mine_explosion(gs, enemy->tile_x, enemy->tile_y);
-                    build_enemy_occupancy(gs, enemy_occupancy);
+                    enemy_occupancy_ready = false;
+                    moving_block_occupancy_ready = false;
+                    moving_block_occupancy_ptr = NULL;
                 }
             }
             continue;
@@ -4902,22 +5272,28 @@ static void update_enemies(GameState *gs) {
             const int old_tile_y = enemy->tile_y;
             enemy_step_movement(enemy);
             if (old_tile_x != enemy->tile_x || old_tile_y != enemy->tile_y) {
-                enemy_occupancy_move(
-                    enemy_occupancy,
-                    old_tile_x,
-                    old_tile_y,
-                    enemy->tile_x,
-                    enemy->tile_y);
+                if (enemy_occupancy_ready) {
+                    enemy_occupancy_move(
+                        enemy_occupancy,
+                        old_tile_x,
+                        old_tile_y,
+                        enemy->tile_x,
+                        enemy->tile_y);
+                }
             }
             if (enemy->move_remaining_fp == 0) {
                 if (enemy_can_trigger_mine(enemy) && gs->mines[enemy->tile_y][enemy->tile_x]) {
                     trigger_mine_explosion(gs, enemy->tile_x, enemy->tile_y);
-                    build_enemy_occupancy(gs, enemy_occupancy);
+                    enemy_occupancy_ready = false;
+                    moving_block_occupancy_ready = false;
+                    moving_block_occupancy_ptr = NULL;
                     if (!enemy->alive) {
                         continue;
                     }
                 }
-                enemy->decision_cooldown_ticks = enemy_decision_pause_ticks(gs, i, enemy_occupancy, moving_block_occupancy);
+                ENSURE_ENEMY_OCCUPANCY();
+                ENSURE_MOVING_BLOCK_OCCUPANCY();
+                enemy->decision_cooldown_ticks = enemy_decision_pause_ticks(gs, i, enemy_occupancy, moving_block_occupancy_ptr);
             }
             continue;
         }
@@ -4927,7 +5303,9 @@ static void update_enemies(GameState *gs) {
             continue;
         }
 
-        enemy->direction = choose_enemy_direction(gs, i, enemy_occupancy, moving_block_occupancy);
+        ENSURE_ENEMY_OCCUPANCY();
+        ENSURE_MOVING_BLOCK_OCCUPANCY();
+        enemy->direction = choose_enemy_direction(gs, i, enemy_occupancy, moving_block_occupancy_ptr);
         if (enemy->direction == DIR_NONE) {
             enemy->decision_cooldown_ticks = 0;
             continue;
@@ -4935,6 +5313,8 @@ static void update_enemies(GameState *gs) {
         enemy->move_remaining_fp = TILE_FP;
         enemy_step_movement(enemy);
     }
+#undef ENSURE_ENEMY_OCCUPANCY
+#undef ENSURE_MOVING_BLOCK_OCCUPANCY
 }
 
 static void update_bonus_item_timer(GameState *gs) {
@@ -4969,6 +5349,10 @@ static void resolve_player_enemy_collision(GameState *gs) {
     for (int i = 0; enemy_mask != 0u && i < gs->enemy_count; ++i, enemy_mask >>= 1) {
         const Enemy *enemy = &gs->enemies[i];
         if ((enemy_mask & 1u) == 0u || !enemy->alive) {
+            continue;
+        }
+        if (abs_int_fast(enemy->tile_x - gs->player.tile_x) > 1 ||
+            abs_int_fast(enemy->tile_y - gs->player.tile_y) > 1) {
             continue;
         }
 
@@ -5033,6 +5417,15 @@ static void check_round_clear(GameState *gs) {
     emit_event(gs, GAME_EVENT_ROUND_CLEAR);
 }
 
+#if defined(ICEPANIC_AMIGA_OCS_ARCADE_CORE) && defined(ICEPANIC_AMIGA_OCS_SKIP_PERK_UI)
+static void update_perk_choice(GameState *gs, const InputState *in, bool start_released, bool fire_confirm_released) {
+    game_start_round(gs, gs->pending_round_after_choice);
+}
+
+static void update_meta_upgrade_choice(GameState *gs, const InputState *in, bool start_released, bool fire_confirm_released) {
+    game_start_round(gs, 1);
+}
+#else
 static void update_perk_choice(GameState *gs, const InputState *in, bool start_released, bool fire_confirm_released) {
     if (gs->perk_choice_count <= 0) {
         game_start_round(gs, gs->pending_round_after_choice);
@@ -5056,6 +5449,7 @@ static void update_perk_choice(GameState *gs, const InputState *in, bool start_r
     }
 
     if (gs->phase_timer_ticks > 0) {
+        start_released = false;
         fire_confirm_released = false;
     }
 
@@ -5070,7 +5464,7 @@ static void update_perk_choice(GameState *gs, const InputState *in, bool start_r
     game_start_round(gs, gs->pending_round_after_choice);
 }
 
-static void update_meta_upgrade_choice(GameState *gs, const InputState *in, bool fire_confirm_released) {
+static void update_meta_upgrade_choice(GameState *gs, const InputState *in, bool start_released, bool fire_confirm_released) {
     if (gs->meta_choice_count <= 0 || gs->meta_shards == 0u) {
         game_start_round(gs, 1);
         return;
@@ -5092,11 +5486,11 @@ static void update_meta_upgrade_choice(GameState *gs, const InputState *in, bool
     }
 
 #if defined(ICEPANIC_AMIGA_SMALL_STACK)
-    if (!in->start && !fire_confirm_released) {
+    if (!start_released && !fire_confirm_released) {
         return;
     }
 #else
-    if (!in->start) {
+    if (!start_released) {
         return;
     }
 #endif
@@ -5124,6 +5518,7 @@ static void update_meta_upgrade_choice(GameState *gs, const InputState *in, bool
         emit_event(gs, GAME_EVENT_META_SPENT);
     }
 }
+#endif
 
 static void handle_player_death_transition(GameState *gs) {
     const bool timeout_death = gs->player_death_from_timeout;
@@ -5899,6 +6294,7 @@ void game_start_round(GameState *gs, int round_index) {
     }
 
     apply_stage_modifier_to_map(gs, enemy_spawns, enemy_spawn_count);
+#if !defined(ICEPANIC_AMIGA_OCS_ARCADE_CORE)
     {
         char patched_rows[GAME_GRID_HEIGHT][GAME_GRID_WIDTH + 1];
         const int min_mine_anchor_opportunities = clampi(3 + (gs->round / 5), 3, 6);
@@ -5911,6 +6307,7 @@ void game_start_round(GameState *gs, int round_index) {
             min_mine_anchor_opportunities);
         apply_runtime_blocks_from_level_rows(gs, patched_rows);
     }
+#endif
 
     gs->enemy_count = clampi(gs->round_config.enemy_count, 1, GAME_MAX_ENEMIES);
     if (enemy_spawn_count > gs->enemy_count) {
@@ -6040,7 +6437,11 @@ void game_step(GameState *gs, const InputState *in) {
         case GAME_PHASE_ROUND_INTRO:
         {
             const bool confirm_title = start_released || fire_confirm_released;
-            const bool confirm_intro = start_released || fire_confirm_released || input.newest_press != DIR_NONE;
+            const bool direction_held = input.up || input.down || input.left || input.right;
+            const bool confirm_intro = start_released ||
+                                       fire_confirm_released ||
+                                       input.newest_press != DIR_NONE ||
+                                       (gs->phase_timer_ticks <= 1 && direction_held);
             if (gs->start_title_pending) {
                 if (gs->phase_timer_ticks > 0) {
                     --gs->phase_timer_ticks;
@@ -6082,7 +6483,7 @@ void game_step(GameState *gs, const InputState *in) {
             break;
 
         case GAME_PHASE_ROUND_CLEAR:
-            if (input.start
+            if (start_released
 #if defined(ICEPANIC_AMIGA_SMALL_STACK)
                 || fire_confirm_released
 #endif
@@ -6101,7 +6502,7 @@ void game_step(GameState *gs, const InputState *in) {
             break;
 
         case GAME_PHASE_GAME_OVER:
-            if (input.start
+            if (start_released
 #if defined(ICEPANIC_AMIGA_SMALL_STACK)
                 || fire_confirm_released
 #endif
@@ -6126,7 +6527,7 @@ void game_step(GameState *gs, const InputState *in) {
             break;
 
         case GAME_PHASE_META_UPGRADE:
-            update_meta_upgrade_choice(gs, &input, fire_confirm_released);
+            update_meta_upgrade_choice(gs, &input, start_released, fire_confirm_released);
             update_score_popups(gs);
             update_impact_fx(gs);
             break;
@@ -6208,6 +6609,7 @@ int game_get_meta_unlock_tier(const GameState *gs) {
     return meta_unlock_tier_from_progress(gs->meta_progress_points);
 }
 
+#if !defined(ICEPANIC_AMIGA_OCS_ARCADE_CORE)
 static uint32_t hash_u32(uint32_t h, uint32_t v) {
     h ^= v;
     h *= 16777619u;
@@ -6321,7 +6723,11 @@ int game_debug_count_enemy_type(const GameState *gs, EnemyType type) {
 }
 
 bool game_debug_validate_level_rows(const char rows[GAME_GRID_HEIGHT][GAME_GRID_WIDTH + 1]) {
+#if defined(ICEPANIC_AMIGA_OCS_ARCADE_CORE)
+    return rows != NULL;
+#else
     return validate_level_rows_internal(rows);
+#endif
 }
 
 void game_debug_force_next_stage_modifier(GameState *gs, StageModifierType modifier) {
@@ -6338,10 +6744,20 @@ void game_debug_force_next_stage_modifier(GameState *gs, StageModifierType modif
 }
 
 int game_debug_procgen_template_count(void) {
+#ifdef ICEPANIC_AMIGA_OCS_FIXED_LEVELS
+    return 0;
+#else
     return PROCGEN_WFC_TEMPLATE_COUNT;
+#endif
 }
 
 bool game_debug_get_procgen_template_rows(int template_index, char out_rows[GAME_GRID_HEIGHT][GAME_GRID_WIDTH + 1]) {
+#ifdef ICEPANIC_AMIGA_OCS_FIXED_LEVELS
+    if (out_rows == NULL || template_index < 0) {
+        return false;
+    }
+    return false;
+#else
     if (out_rows == NULL) {
         return false;
     }
@@ -6352,6 +6768,7 @@ bool game_debug_get_procgen_template_rows(int template_index, char out_rows[GAME
         memcpy(out_rows[y], kProcgenWfcTemplates[template_index][y], GAME_GRID_WIDTH + 1);
     }
     return true;
+#endif
 }
 
 int game_debug_last_procgen_template_index(const GameState *gs) {
@@ -6365,6 +6782,12 @@ void game_debug_force_next_procgen_template(GameState *gs, int template_index) {
     if (gs == NULL) {
         return;
     }
+#ifdef ICEPANIC_AMIGA_OCS_FIXED_LEVELS
+    gs->debug_forced_procgen_template_index = template_index;
+    gs->debug_force_procgen_template_pending = false;
+#else
     gs->debug_forced_procgen_template_index = template_index;
     gs->debug_force_procgen_template_pending = true;
+#endif
 }
+#endif

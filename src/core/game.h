@@ -181,6 +181,7 @@ typedef struct Player {
     Direction facing;
     Direction move_dir;
     Direction buffered_dir;
+    int buffered_dir_ticks;
     PlayerState state;
     int move_remaining_fp;
     int push_timer;

@@ -327,6 +327,7 @@ static void force_apply_perk_choice(GameState *gs, PerkType perk) {
     InputState release = {0};
     press.start = true;
     gs->phase = GAME_PHASE_PERK_CHOICE;
+    gs->phase_timer_ticks = 0;
     gs->perk_choice_count = 1;
     gs->perk_choice_selected = 0;
     gs->perk_choices[0] = perk;
@@ -913,6 +914,44 @@ static bool test_respawn_relocates_to_safe_tile(void) {
     return true;
 }
 
+static bool test_respawn_intro_held_direction_reenters_play(void) {
+    const char *name = "respawn_intro_held_direction_reenters_play";
+    GameState gs;
+    InputState held = {0};
+    InputState none = {0};
+
+    init_empty_playing_arena(&gs);
+    gs.phase = GAME_PHASE_ROUND_INTRO;
+    gs.phase_timer_ticks = 2;
+    gs.start_title_pending = false;
+    gs.player.respawn_invuln_ticks = 0;
+
+    gs.enemy_count = 1;
+    gs.alive_enemy_count = 1;
+    gs.alive_enemy_mask = 1u;
+    gs.enemies[0].alive = true;
+    gs.enemies[0].state = ENEMY_ROAMING;
+    gs.enemies[0].type = ENEMY_TYPE_CHASER;
+    gs.enemies[0].tile_x = gs.player.tile_x;
+    gs.enemies[0].tile_y = gs.player.tile_y;
+    gs.enemies[0].pixel_fp_x = gs.player.pixel_fp_x;
+    gs.enemies[0].pixel_fp_y = gs.player.pixel_fp_y;
+    gs.enemies[0].direction = DIR_NONE;
+    gs.enemies[0].speed_fp = FP_ONE_TEST;
+    gs.enemies[0].spawn_ticks = 0;
+    gs.enemies[0].decision_cooldown_ticks = 100;
+
+    held.right = true;
+    held.newest_press = DIR_NONE;
+    game_step(&gs, &held);
+    REQUIRE(name, gs.phase == GAME_PHASE_ROUND_INTRO, "held direction should not skip the whole respawn intro immediately");
+    game_step(&gs, &held);
+    REQUIRE(name, gs.phase == GAME_PHASE_PLAYING, "held direction did not leave respawn intro after the timer elapsed");
+    game_step(&gs, &none);
+    REQUIRE(name, gs.phase == GAME_PHASE_PLAYER_DYING, "enemy contact did not kill after respawn intro re-entered play");
+    return true;
+}
+
 static bool test_enemy_adjacent_target_tile_does_not_kill_before_touch(void) {
     const char *name = "enemy_adjacent_target_tile_does_not_kill_before_touch";
     GameState gs;
@@ -1150,6 +1189,35 @@ static bool test_perk_choice_applies_selected_perk(void) {
     return true;
 }
 
+static bool test_modal_confirms_wait_for_button_release(void) {
+    const char *name = "modal_confirms_wait_for_button_release";
+    GameState gs;
+    InputState press = {0};
+    InputState release = {0};
+
+    init_empty_playing_arena(&gs);
+    gs.phase = GAME_PHASE_ROUND_CLEAR;
+    gs.phase_timer_ticks = 10;
+    gs.round = 1;
+    press.start = true;
+    game_step(&gs, &press);
+    REQUIRE(name, gs.phase == GAME_PHASE_ROUND_CLEAR, "round clear skipped on button down");
+    REQUIRE(name, gs.phase_timer_ticks > 0, "round clear timer was cleared on button down");
+    game_step(&gs, &release);
+    REQUIRE(name, gs.phase == GAME_PHASE_PERK_CHOICE, "round clear did not accept button release");
+
+    init_empty_playing_arena(&gs);
+    gs.phase = GAME_PHASE_GAME_OVER;
+    gs.phase_timer_ticks = 10;
+    press.start = true;
+    game_step(&gs, &press);
+    REQUIRE(name, gs.phase == GAME_PHASE_GAME_OVER, "game over skipped on button down");
+    REQUIRE(name, gs.phase_timer_ticks > 0, "game over timer was cleared on button down");
+    game_step(&gs, &release);
+    REQUIRE(name, gs.phase == GAME_PHASE_ROUND_INTRO || gs.phase == GAME_PHASE_PLAYING, "game over did not accept button release");
+    return true;
+}
+
 static bool test_fire_release_from_round_clear_does_not_skip_perk_choice(void) {
     const char *name = "fire_release_from_round_clear_does_not_skip_perk_choice";
     GameState gs;
@@ -1160,6 +1228,7 @@ static bool test_fire_release_from_round_clear_does_not_skip_perk_choice(void) {
     gs.round = 1;
     gs.fire_was_down = true;
     gs.fire_confirm_armed = false;
+    gs.start_was_down = true;
 
     {
         InputState release = {0};
@@ -1180,6 +1249,7 @@ static bool test_fire_release_from_round_clear_does_not_skip_perk_choice(void) {
         InputState press = {0};
         InputState release = {0};
         press.fire_pressed = true;
+        press.start = true;
         release.fire_released = true;
         game_step(&gs, &press);
         game_step(&gs, &release);
@@ -1196,6 +1266,7 @@ static bool test_fire_release_from_round_clear_does_not_skip_perk_choice(void) {
         InputState press = {0};
         InputState release = {0};
         press.fire_pressed = true;
+        press.start = true;
         release.fire_released = true;
         game_step(&gs, &press);
         game_step(&gs, &release);
@@ -3142,15 +3213,18 @@ static bool test_game_over_start_edge_restarts_once(void) {
     gs.meta_shards = 0u;
 
     {
-        InputState hold_start = {0};
-        hold_start.start = true;
-        game_step(&gs, &hold_start);
+        InputState press_start = {0};
+        InputState release_start = {0};
+        press_start.start = true;
+        game_step(&gs, &press_start);
+        REQUIRE(name, gs.phase == GAME_PHASE_GAME_OVER, "start press from game over should not restart on button down");
+        game_step(&gs, &release_start);
     }
 
     REQUIRE(
         name,
         gs.phase == GAME_PHASE_ROUND_INTRO || gs.phase == GAME_PHASE_PLAYING,
-        "start press from game over should restart run once");
+        "start release from game over should restart run once");
     REQUIRE(name, gs.score == 0u, "new run reset did not clear score");
     REQUIRE(name, gs.round == 1, "new run reset did not restart at round 1");
     REQUIRE(name, gs.lives == default_lives, "new run reset did not restore default lives");
@@ -3280,6 +3354,7 @@ int main(void) {
     failed += test_push_slide_crushes_interpolated_enemy_overlap() ? 0 : 1;
     failed += test_death_preserves_map_state() ? 0 : 1;
     failed += test_respawn_relocates_to_safe_tile() ? 0 : 1;
+    failed += test_respawn_intro_held_direction_reenters_play() ? 0 : 1;
     failed += test_enemy_adjacent_target_tile_does_not_kill_before_touch() ? 0 : 1;
     failed += test_round_clear_advances_round() ? 0 : 1;
     failed += test_round_clear_does_not_require_points() ? 0 : 1;
@@ -3287,6 +3362,7 @@ int main(void) {
     failed += test_round_clear_pending_stops_timer_and_blocks_player_death() ? 0 : 1;
     failed += test_timeout_death_bypasses_respawn_invulnerability() ? 0 : 1;
     failed += test_perk_choice_applies_selected_perk() ? 0 : 1;
+    failed += test_modal_confirms_wait_for_button_release() ? 0 : 1;
     failed += test_fire_release_from_round_clear_does_not_skip_perk_choice() ? 0 : 1;
     failed += test_perk_draft_anti_repeat_has_new_offer() ? 0 : 1;
     failed += test_perk_draft_fills_three_when_fresh_options_are_capped() ? 0 : 1;
